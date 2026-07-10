@@ -34,7 +34,7 @@ export default function AppLayout() {
       {contextHolder}
       <Layout.Sider width={228} className={styles.sider}>
         <div className={styles.brand}>
-          <div className={styles.brandMark}>同</div>
+          <img className={styles.brandMark} src="/brand/tong-net-logo.png" alt="同网互通 Logo" />
           <div>
             <div className={styles.brandName}>同网互通</div>
             <div className={styles.brandSub}>局域网临时传输站</div>

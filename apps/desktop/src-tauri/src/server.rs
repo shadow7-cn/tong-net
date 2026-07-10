@@ -68,17 +68,13 @@ struct TempCleanup {
     path: PathBuf,
     armed: bool,
     core: Arc<ServerCore>,
-    file_name: String,
-    peer: String,
+    transfer_id: String,
 }
 impl Drop for TempCleanup {
     fn drop(&mut self) {
         if self.armed {
             let _ = std::fs::remove_file(&self.path);
-            let _ = self
-                .core
-                .db
-                .add_transfer("upload", &self.file_name, &self.peer, "failed");
+            let _ = self.core.db.finish_transfer(&self.transfer_id, "failed", 0);
             broadcast_refresh(&self.core, "transfer_failed");
         }
     }
@@ -309,6 +305,40 @@ async fn upload_file(
 ) -> ApiResult<Json<MessageRecord>> {
     verify_token(&core, &headers, None)?;
     let me = participants(&core, &headers, &peer)?;
+    let transfer_id = headers
+        .get("x-transfer-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 80)
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let total_bytes = headers
+        .get("x-file-size")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_default();
+    let header_name = headers
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| urlencoding::decode(value).ok())
+        .map(|value| value.into_owned())
+        .unwrap_or_else(|| "未完成文件".into());
+    let peer_name = core
+        .db
+        .list_devices(&[])
+        .ok()
+        .and_then(|items| items.into_iter().find(|item| item.id == peer))
+        .map(|item| item.name)
+        .unwrap_or_else(|| peer.clone());
+    core.db
+        .start_transfer(
+            &transfer_id,
+            "upload",
+            &header_name,
+            &peer_name,
+            total_bytes,
+        )
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    broadcast_refresh(&core, "transfer_started");
     tokio::fs::create_dir_all(&core.temp_dir)
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -321,8 +351,7 @@ async fn upload_file(
         path: temp_path.clone(),
         armed: true,
         core: core.clone(),
-        file_name: "未完成文件".into(),
-        peer: peer.clone(),
+        transfer_id: transfer_id.clone(),
     };
     let mut original_name = None;
     let result: Result<u64, String> = async {
@@ -336,7 +365,9 @@ async fn upload_file(
                 .and_then(|v| v.to_str())
                 .unwrap_or("未命名文件")
                 .to_string();
-            cleanup.file_name = safe_name.clone();
+            let _ =
+                core.db
+                    .start_transfer(&transfer_id, "upload", &safe_name, &peer_name, total_bytes);
             original_name = Some(safe_name);
             let mut output = tokio::fs::File::create(&temp_path)
                 .await
@@ -345,6 +376,7 @@ async fn upload_file(
             while let Some(chunk) = field.chunk().await.map_err(|e| e.to_string())? {
                 size += chunk.len() as u64;
                 output.write_all(&chunk).await.map_err(|e| e.to_string())?;
+                let _ = core.db.update_transfer_progress(&transfer_id, size);
             }
             output.flush().await.map_err(|e| e.to_string())?;
             return Ok(size);
@@ -378,18 +410,24 @@ async fn upload_file(
         .db
         .add_file_message(&me, &peer, file)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let peer_name = core
-        .db
-        .list_devices(&[])
-        .ok()
-        .and_then(|items| items.into_iter().find(|item| item.id == peer))
-        .map(|item| item.name)
-        .unwrap_or(peer);
     core.db
-        .add_transfer("upload", &name, &peer_name, "success")
+        .finish_transfer(&transfer_id, "success", size)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     broadcast_refresh(&core, "file_message_created");
     Ok(Json(record))
+}
+
+async fn cancel_transfer(
+    State(core): State<Arc<ServerCore>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    verify_token(&core, &headers, None)?;
+    core.db
+        .cancel_transfer(&id)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    broadcast_refresh(&core, "transfer_canceled");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn transfers(
@@ -634,6 +672,7 @@ pub fn build_router(core: Arc<ServerCore>, web_root: PathBuf) -> Router {
         .route("/api/conversations/{peer}/files", post(upload_file))
         .route("/api/files/{id}/download", get(download_file))
         .route("/api/transfers", get(transfers))
+        .route("/api/transfers/{id}/cancel", post(cancel_transfer))
         .route("/api/records", get(records))
         .route("/ws", get(websocket))
         .fallback_service(fallback)

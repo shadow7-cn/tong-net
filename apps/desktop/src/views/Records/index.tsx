@@ -11,6 +11,8 @@ import styles from "./index.module.less";
 
 type RecordsData = { devices: Device[]; messages: Message[]; files: FileRecord[]; transfers: TransferTask[] };
 const empty: RecordsData = { devices: [], messages: [], files: [], transfers: [] };
+const tableScroll = { x: "max-content" as const, y: "calc(100vh - 360px)" };
+const tablePagination = { pageSize: 20, showSizeChanger: false };
 
 export default function Records() {
   const [api, contextHolder] = toast.useMessage();
@@ -60,11 +62,11 @@ export default function Records() {
     {contextHolder}
     <header className={styles.header}><div><h1>本地记录</h1><p>访问端、聊天、文件和传输记录保存在本机 SQLite。</p></div><Button icon={<RefreshCw size={16} />} disabled={!running} loading={loading} onClick={load}>刷新</Button></header>
     {!running && <Alert type="info" showIcon message="开启互通服务后可查看本地记录。" />}
-    <Tabs items={[
-      { key: "devices", label: `访问端 (${data.devices.length})`, children: <Table rowKey="id" columns={deviceColumns} dataSource={data.devices} loading={loading} /> },
-      { key: "messages", label: `聊天 (${data.messages.length})`, children: <Table rowKey="id" columns={messageColumns} dataSource={data.messages} loading={loading} /> },
-      { key: "files", label: `文件 (${data.files.length})`, children: <Table rowKey="id" columns={fileColumns} dataSource={data.files} loading={loading} /> },
-      { key: "transfers", label: `传输 (${data.transfers.length})`, children: <Table rowKey="id" columns={transferColumns} dataSource={data.transfers} loading={loading} /> },
+    <Tabs className={styles.tabs} items={[
+      { key: "devices", label: `访问端 (${data.devices.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={deviceColumns} dataSource={data.devices} loading={loading} /></div> },
+      { key: "messages", label: `聊天 (${data.messages.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={messageColumns} dataSource={data.messages} loading={loading} /></div> },
+      { key: "files", label: `文件 (${data.files.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={fileColumns} dataSource={data.files} loading={loading} /></div> },
+      { key: "transfers", label: `传输 (${data.transfers.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={transferColumns} dataSource={data.transfers} loading={loading} /></div> },
     ]} />
   </div>;
 }

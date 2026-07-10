@@ -9,7 +9,8 @@ type TransferProgressProps = {
 
 export default function TransferProgress({ task }: TransferProgressProps) {
   const Icon = task.kind === "upload" ? ArrowUpFromLine : ArrowDownToLine;
-  const color = task.status === "failed" ? "#dc2626" : task.status === "success" ? "#16a34a" : "#2563eb";
+  const color = task.status === "failed" ? "#dc2626" : task.status === "canceled" ? "#64748b" : task.status === "success" ? "#16a34a" : "#2563eb";
+  const statusText = task.status === "failed" ? "失败" : task.status === "canceled" ? "已取消" : task.status === "success" ? "完成" : "传输中";
 
   return (
     <div className={styles.task}>
@@ -19,8 +20,8 @@ export default function TransferProgress({ task }: TransferProgressProps) {
       <div className={styles.body}>
         <div className={styles.topline}>
           <span className={styles.name}>{task.fileName}</span>
-          <Tag color={task.status === "failed" ? "red" : task.status === "success" ? "green" : "blue"}>
-            {task.status === "failed" ? "失败" : task.status === "success" ? "完成" : "传输中"}
+          <Tag color={task.status === "failed" ? "red" : task.status === "canceled" ? "default" : task.status === "success" ? "green" : "blue"}>
+            {statusText}
           </Tag>
         </div>
         <div className={styles.peer}>{task.kind === "upload" ? "发给" : "来自"} {task.peerName}</div>
@@ -29,4 +30,3 @@ export default function TransferProgress({ task }: TransferProgressProps) {
     </div>
   );
 }
-

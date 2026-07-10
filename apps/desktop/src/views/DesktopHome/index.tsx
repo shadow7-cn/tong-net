@@ -157,10 +157,12 @@ export default function DesktopHome() {
             <CheckCircle2 size={17} />
             最近传输
           </div>
-          {transfers.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无传输" />}
-          {transfers.map((task) => (
-            <TransferProgress key={task.id} task={task} />
-          ))}
+          <div className={styles.transferList}>
+            {transfers.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无传输" />}
+            {transfers.map((task) => (
+              <TransferProgress key={task.id} task={task} />
+            ))}
+          </div>
         </div>
       </section>
     </div>

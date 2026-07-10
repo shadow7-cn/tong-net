@@ -46,8 +46,11 @@ export type TransferTask = {
   fileName: string;
   peerName: string;
   progress: number;
-  status: "running" | "success" | "failed";
+  status: "running" | "success" | "failed" | "canceled";
   createdAt?: string;
+  totalBytes?: number;
+  transferredBytes?: number;
+  finishedAt?: string;
 };
 
 export type ServiceInfo = {

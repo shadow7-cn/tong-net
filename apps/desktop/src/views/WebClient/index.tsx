@@ -1,11 +1,11 @@
 import { ChangeEvent, UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Empty, Input, Progress, Spin, Tag, message as toast } from "antd";
-import { ChevronDown, ChevronLeft, Paperclip, Send, UserRoundPen } from "lucide-react";
+import { ChevronDown, ChevronLeft, Paperclip, RotateCcw, Send, UserRoundPen, X } from "lucide-react";
 import { getBootstrap } from "@/api/service";
 import { listDevices, saveDeviceName, updateDeviceName } from "@/api/device";
 import { listMessages } from "@/api/conversation";
 import { sendTextMessage } from "@/api/message";
-import { uploadConversationFile } from "@/api/file";
+import { cancelTransfer, uploadConversationFile } from "@/api/file";
 import DeviceAvatar from "@/components/DeviceAvatar";
 import FileCard from "@/components/FileCard";
 import { useDeviceIdentity } from "@/hooks/useDeviceIdentity";
@@ -16,9 +16,18 @@ import type { Device, Message } from "@/types/domain";
 import { formatTime } from "@/utils/time";
 import { createId } from "@/utils/id";
 import { isNearScrollBottom } from "@/utils/scroll";
+import { estimateRemainingSeconds, formatRemainingTime, formatTransferSpeed } from "@/utils/transfer";
 import styles from "./index.module.less";
 
-type UploadItem = { id: string; name: string; progress: number; failed?: boolean };
+type UploadItem = {
+  id: string;
+  file: File;
+  name: string;
+  progress: number;
+  speed: number;
+  remaining: number;
+  status: "running" | "failed" | "canceled";
+};
 
 function defaultNickname() {
   if (/iPhone/i.test(navigator.userAgent)) return "我的 iPhone 访问端";
@@ -34,6 +43,8 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottomRef = useRef(true);
+  const uploadControllersRef = useRef(new Map<string, AbortController>());
+  const uploadSamplesRef = useRef(new Map<string, { time: number; bytes: number; speed: number }>());
   const messagesRef = useRef<Message[]>([]);
   const clientId = useDeviceIdentity();
   const serviceRunning = useServiceStore((state) => state.running);
@@ -124,7 +135,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     if (container && shouldStickToBottomRef.current) {
       container.scrollTop = container.scrollHeight;
     }
-  }, [messages, uploads]);
+  }, [messages, mobileView, uploads]);
 
   const { connected } = useLanSocket(Boolean(currentDevice), currentDevice?.id ?? "", () => { void refresh(); });
 
@@ -178,31 +189,71 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     } catch (error: any) { api.error(error.response?.data?.message ?? "昵称更新失败"); }
   };
 
-  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+  const startUpload = (file: File) => {
+    if (!selectedDevice) return;
+    const peerId = selectedDevice.id;
+    const id = createId();
+    const controller = new AbortController();
+    uploadControllersRef.current.set(id, controller);
+    uploadSamplesRef.current.set(id, { time: performance.now(), bytes: 0, speed: 0 });
+    setUploads((items) => [...items, { id, file, name: file.name, progress: 0, speed: 0, remaining: 0, status: "running" }]);
+    const formData = new FormData();
+    formData.append("file", file);
+    void uploadConversationFile(peerId, formData, {
+      transferId: id,
+      fileName: file.name,
+      fileSize: file.size,
+      signal: controller.signal,
+      onProgress: ({ loaded, total, progress }) => {
+        const now = performance.now();
+        const sample = uploadSamplesRef.current.get(id);
+        let speed = sample?.speed ?? 0;
+        if (sample && now - sample.time >= 200) {
+          const instant = (loaded - sample.bytes) / ((now - sample.time) / 1000);
+          speed = sample.speed ? sample.speed * 0.65 + instant * 0.35 : instant;
+          uploadSamplesRef.current.set(id, { time: now, bytes: loaded, speed });
+        }
+        setUploads((items) => items.map((item) => item.id === id ? {
+          ...item,
+          progress,
+          speed,
+          remaining: estimateRemainingSeconds(total, loaded, speed),
+        } : item));
+      },
+    }).then(({ data }) => {
+      setMessages((items) => {
+        const next = [...items, data];
+        messagesRef.current = next;
+        return next;
+      });
+      setUploads((items) => items.filter((item) => item.id !== id));
+    }).catch((error: any) => {
+      if (controller.signal.aborted) return;
+      setUploads((items) => items.map((item) => item.id === id ? { ...item, status: "failed" } : item));
+      api.error(`${file.name} 上传失败：${error.response?.data?.message ?? "连接中断"}`);
+    }).finally(() => {
+      uploadControllersRef.current.delete(id);
+      uploadSamplesRef.current.delete(id);
+    });
+  };
+
+  const cancelUpload = (id: string) => {
+    setUploads((items) => items.map((item) => item.id === id ? { ...item, status: "canceled" } : item));
+    const controller = uploadControllersRef.current.get(id);
+    void cancelTransfer(id).finally(() => controller?.abort());
+  };
+
+  const retryUpload = (item: UploadItem) => {
+    setUploads((items) => items.filter((upload) => upload.id !== item.id));
+    startUpload(item.file);
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (!selectedDevice) return;
     followOwnMessage();
-    for (const file of files) {
-      const id = createId();
-      setUploads((items) => [...items, { id, name: file.name, progress: 0 }]);
-      const formData = new FormData();
-      formData.append("file", file);
-      try {
-        const { data } = await uploadConversationFile(selectedDevice.id, formData, (progress) => {
-          setUploads((items) => items.map((item) => item.id === id ? { ...item, progress } : item));
-        });
-        setMessages((items) => {
-          const next = [...items, data];
-          messagesRef.current = next;
-          return next;
-        });
-        setUploads((items) => items.filter((item) => item.id !== id));
-      } catch (error: any) {
-        setUploads((items) => items.map((item) => item.id === id ? { ...item, failed: true } : item));
-        api.error(`${file.name} 上传失败：${error.response?.data?.message ?? "连接中断"}`);
-      }
-    }
+    files.forEach(startUpload);
   };
 
   if (loading) return <div className={`${styles.centerState} ${hostMode ? styles.desktopCenterState : ""}`}><Spin size="large" /></div>;
@@ -212,7 +263,13 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     <div className={`${styles.page} ${hostMode ? styles.desktopEmbedded : ""} ${mobileView === "chat" ? styles.mobileChat : styles.mobileList}`}>
       {contextHolder}
       <section className={styles.sidebar}>
-        <div className={styles.mobileTitle}><div><h1>同网互通</h1><p>选择一个访问端开始发送消息或文件。</p></div><Tag color={connected ? "green" : "orange"}>{connected ? "已连接" : "重连中"}</Tag></div>
+        <div className={styles.mobileTitle}>
+          <div className={styles.mobileBrand}>
+            <img src="/brand/tong-net-logo.png" alt="同网互通 Logo" />
+            <div><h1>同网互通</h1><p>选择一个访问端开始发送消息或文件。</p></div>
+          </div>
+          <Tag color={connected ? "green" : "orange"}>{connected ? "已连接" : "重连中"}</Tag>
+        </div>
         {currentDevice && <div className={styles.profile}>
           <DeviceAvatar device={currentDevice} />
           <div className={styles.profileBody}><div className={styles.label}>当前访问端</div><Input size="small" value={nickname} maxLength={40} onChange={(event) => setNickname(event.target.value)} onPressEnter={changeNickname} suffix={<UserRoundPen size={14} />} /></div>
@@ -236,8 +293,13 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
           </header>
           <div ref={messageListRef} data-testid="message-list" className={styles.messageList} onScroll={trackMessageScroll}>
             {messages.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有消息" />}
-            {messages.map((item) => { const mine = item.fromDeviceId === currentDevice?.id; return <div key={item.id} className={`${styles.messageRow} ${mine ? styles.mine : ""}`}><div className={styles.messageMeta}>{deviceNameMap.get(item.fromDeviceId) ?? "访问端"} · {formatTime(item.createdAt)}</div><div className={item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} /> : item.content}</div></div>; })}
-            {uploads.map((item) => <div key={item.id} className={`${styles.messageRow} ${styles.mine}`}><div className={styles.messageMeta}>{item.name}</div><div className={styles.uploadBubble}><Progress percent={item.progress} status={item.failed ? "exception" : "active"} size="small" />{item.failed && <Button size="small" type="link" onClick={() => setUploads((items) => items.filter((upload) => upload.id !== item.id))}>移除</Button>}</div></div>)}
+            {messages.map((item) => { const mine = item.fromDeviceId === currentDevice?.id; return <div key={item.id} className={`${styles.messageRow} ${mine ? styles.mine : ""}`}><div className={styles.messageMeta}>{deviceNameMap.get(item.fromDeviceId) ?? "访问端"} · {formatTime(item.createdAt)}</div><div className={item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} hostMode={hostMode} /> : item.content}</div></div>; })}
+            {uploads.map((item) => <div key={item.id} className={`${styles.messageRow} ${styles.mine}`}><div className={styles.messageMeta}>{item.name}</div><div className={styles.uploadBubble}>
+              <Progress percent={item.progress} status={item.status === "failed" ? "exception" : item.status === "running" ? "active" : "normal"} size="small" />
+              <span>{item.status === "running" ? `${formatTransferSpeed(item.speed)} ${formatRemainingTime(item.remaining)}` : item.status === "failed" ? "上传失败" : "已取消"}</span>
+              {item.status === "running" ? <Button size="small" type="text" aria-label="取消传输" icon={<X size={15} />} onClick={() => cancelUpload(item.id)} /> : <Button size="small" type="link" icon={<RotateCcw size={14} />} onClick={() => retryUpload(item)}>重试</Button>}
+              {item.status !== "running" && <Button size="small" type="link" onClick={() => setUploads((items) => items.filter((upload) => upload.id !== item.id))}>移除</Button>}
+            </div></div>)}
           </div>
           {newMessageCount > 0 && (
             <Button className={styles.newMessageNotice} icon={<ChevronDown size={15} />} onClick={scrollToLatest}>

@@ -4,8 +4,18 @@ mod server;
 
 use chrono::Utc;
 use config::{app_data_dir, load_settings, save_settings, AppSettings};
-use server::{lan_ip, make_core, serve, serve_listener, ServiceInfo};
-use std::{path::PathBuf, sync::Mutex};
+use serde::Serialize;
+use server::{lan_ip, make_core, serve, serve_listener, ServerCore, ServiceInfo};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
+use tauri::Emitter;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -13,11 +23,13 @@ struct RunningService {
     info: ServiceInfo,
     shutdown: oneshot::Sender<()>,
     events: tokio::sync::broadcast::Sender<String>,
+    core: Arc<ServerCore>,
 }
 
 struct AppRuntime {
     settings: Mutex<AppSettings>,
     service: Mutex<Option<RunningService>>,
+    native_cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl Default for AppRuntime {
@@ -25,6 +37,7 @@ impl Default for AppRuntime {
         Self {
             settings: Mutex::new(load_settings()),
             service: Mutex::new(None),
+            native_cancellations: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -128,8 +141,9 @@ async fn start_service(state: tauri::State<'_, AppRuntime>) -> Result<ServiceInf
         .await
         .map_err(|error| format!("端口 {} 无法使用：{error}", settings.port))?;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server_core = core.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = serve_listener(core, web_root, listener, shutdown_rx).await {
+        if let Err(error) = serve_listener(server_core, web_root, listener, shutdown_rx).await {
             eprintln!("同网互通服务退出：{error}");
         }
     });
@@ -153,6 +167,7 @@ async fn start_service(state: tauri::State<'_, AppRuntime>) -> Result<ServiceInf
         info: info.clone(),
         shutdown: shutdown_tx,
         events,
+        core,
     });
     Ok(info)
 }
@@ -185,10 +200,164 @@ fn open_save_directory(state: tauri::State<'_, AppRuntime>) -> Result<(), String
     open::that(path).map_err(|error| error.to_string())
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTransferProgress {
+    transfer_id: String,
+    transferred_bytes: u64,
+    total_bytes: u64,
+}
+
+async fn copy_with_progress(
+    source: &Path,
+    destination: &Path,
+    transfer_id: &str,
+    total_bytes: u64,
+    canceled: Arc<AtomicBool>,
+    app: &tauri::AppHandle,
+) -> Result<u64, String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "保存路径无效".to_string())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| error.to_string())?;
+    let temp_path = parent.join(format!(
+        ".{}.{}.part",
+        destination
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("tong-net"),
+        transfer_id
+    ));
+    let result = async {
+        let mut input = tokio::fs::File::open(source)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut output = tokio::fs::File::create(&temp_path)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut buffer = vec![0u8; 256 * 1024];
+        let mut transferred = 0u64;
+        loop {
+            if canceled.load(Ordering::Relaxed) {
+                return Err("传输已取消".to_string());
+            }
+            let read = input
+                .read(&mut buffer)
+                .await
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..read])
+                .await
+                .map_err(|error| error.to_string())?;
+            transferred += read as u64;
+            let _ = app.emit(
+                "native-transfer-progress",
+                NativeTransferProgress {
+                    transfer_id: transfer_id.to_string(),
+                    transferred_bytes: transferred,
+                    total_bytes,
+                },
+            );
+        }
+        output.flush().await.map_err(|error| error.to_string())?;
+        if destination.exists() {
+            tokio::fs::remove_file(destination)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        tokio::fs::rename(&temp_path, destination)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(transferred)
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(temp_path).await;
+    }
+    result
+}
+
+#[tauri::command]
+async fn save_file_as(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppRuntime>,
+    file_id: String,
+    destination: String,
+    transfer_id: String,
+) -> Result<(), String> {
+    let core = state
+        .service
+        .lock()
+        .map_err(|_| "服务状态不可用".to_string())?
+        .as_ref()
+        .map(|service| service.core.clone())
+        .ok_or_else(|| "互通服务未运行".to_string())?;
+    let (name, stored_name, size) = core
+        .db
+        .file_path_info(&file_id)?
+        .ok_or_else(|| "文件不存在".to_string())?;
+    core.db
+        .start_transfer(&transfer_id, "download", &name, "本机另存", size)?;
+    let canceled = Arc::new(AtomicBool::new(false));
+    state
+        .native_cancellations
+        .lock()
+        .map_err(|_| "传输状态不可用".to_string())?
+        .insert(transfer_id.clone(), canceled.clone());
+    let source = core.settings.save_dir.join(stored_name);
+    let result = copy_with_progress(
+        &source,
+        Path::new(&destination),
+        &transfer_id,
+        size,
+        canceled,
+        &app,
+    )
+    .await;
+    state
+        .native_cancellations
+        .lock()
+        .map_err(|_| "传输状态不可用".to_string())?
+        .remove(&transfer_id);
+    match result {
+        Ok(transferred) => core
+            .db
+            .finish_transfer(&transfer_id, "success", transferred)?,
+        Err(ref error) if error == "传输已取消" => core.db.cancel_transfer(&transfer_id)?,
+        Err(_) => core.db.finish_transfer(&transfer_id, "failed", 0)?,
+    }
+    let _ = core
+        .events
+        .send(serde_json::json!({ "type": "transfer_updated" }).to_string());
+    result.map(|_| ())
+}
+
+#[tauri::command]
+fn cancel_native_transfer(
+    state: tauri::State<'_, AppRuntime>,
+    transfer_id: String,
+) -> Result<(), String> {
+    if let Some(flag) = state
+        .native_cancellations
+        .lock()
+        .map_err(|_| "传输状态不可用".to_string())?
+        .get(&transfer_id)
+    {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppRuntime::default())
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -196,7 +365,9 @@ pub fn run() {
             get_service_status,
             start_service,
             stop_service,
-            open_save_directory
+            open_save_directory,
+            save_file_as,
+            cancel_native_transfer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,6 +2,9 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .securityNotice {
@@ -166,11 +169,48 @@
   display: grid;
   grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.1fr);
   gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .deviceList {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding-right: 5px;
+  overflow-y: auto;
+}
+
+.transferList {
+  flex: 1;
+  min-height: 0;
+  padding-right: 5px;
+  overflow-y: auto;
+}
+
+.deviceList,
+.transferList {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.deviceList::-webkit-scrollbar,
+.transferList::-webkit-scrollbar {
+  width: 7px;
+}
+
+.deviceList::-webkit-scrollbar-thumb,
+.transferList::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
 }
 
 .deviceItem {

@@ -1,7 +1,50 @@
 .page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
   padding: 18px;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.tabs {
+  flex: 1;
+  min-height: 0;
+}
+
+.tabs :global(.ant-tabs-content-holder) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tabs :global(.ant-tabs-content),
+.tabs :global(.ant-tabs-tabpane) {
+  height: 100%;
+  min-height: 0;
+}
+
+.tableScroll {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tableScroll :global(.ant-table-body) {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.tableScroll :global(.ant-table-body::-webkit-scrollbar) {
+  width: 7px;
+  height: 7px;
+}
+
+.tableScroll :global(.ant-table-body::-webkit-scrollbar-thumb) {
+  background: #cbd5e1;
   border-radius: 8px;
 }
 

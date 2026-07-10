@@ -50,6 +50,9 @@ pub struct TransferRecord {
     pub progress: u8,
     pub status: String,
     pub created_at: String,
+    pub total_bytes: u64,
+    pub transferred_bytes: u64,
+    pub finished_at: Option<String>,
 }
 
 pub struct Database(pub Mutex<Connection>);
@@ -93,6 +96,15 @@ impl Database {
             [],
         );
         let _ = connection.execute("ALTER TABLE devices ADD COLUMN removed_at TEXT", []);
+        let _ = connection.execute(
+            "ALTER TABLE transfers ADD COLUMN total_bytes INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = connection.execute(
+            "ALTER TABLE transfers ADD COLUMN transferred_bytes INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = connection.execute("ALTER TABLE transfers ADD COLUMN finished_at TEXT", []);
         let now = Utc::now().to_rfc3339();
         connection
             .execute(
@@ -376,9 +388,58 @@ impl Database {
         Ok(())
     }
 
+    pub fn start_transfer(
+        &self,
+        id: &str,
+        kind: &str,
+        file_name: &str,
+        peer_name: &str,
+        total_bytes: u64,
+    ) -> Result<(), String> {
+        let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
+        db.execute(
+            "INSERT INTO transfers(id,kind,file_name,peer_name,progress,status,created_at,total_bytes,transferred_bytes,finished_at)
+             VALUES(?1,?2,?3,?4,0,'running',?5,?6,0,NULL)
+             ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,file_name=excluded.file_name,peer_name=excluded.peer_name,
+             progress=0,status='running',created_at=excluded.created_at,total_bytes=excluded.total_bytes,transferred_bytes=0,finished_at=NULL",
+            params![id, kind, file_name, peer_name, Utc::now().to_rfc3339(), total_bytes as i64],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn update_transfer_progress(&self, id: &str, transferred: u64) -> Result<(), String> {
+        let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
+        db.execute(
+            "UPDATE transfers SET transferred_bytes=?2,
+             progress=CASE WHEN total_bytes > 0 THEN MIN(99, CAST(?2 * 100 / total_bytes AS INTEGER)) ELSE 0 END
+             WHERE id=?1 AND status='running'",
+            params![id, transferred as i64],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn finish_transfer(&self, id: &str, status: &str, transferred: u64) -> Result<(), String> {
+        let progress = if status == "success" { 100 } else { 0 };
+        let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
+        db.execute(
+            "UPDATE transfers SET status=?2,progress=?3,transferred_bytes=?4,finished_at=?5 WHERE id=?1 AND status='running'",
+            params![id, status, progress, transferred as i64, Utc::now().to_rfc3339()],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn cancel_transfer(&self, id: &str) -> Result<(), String> {
+        let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
+        db.execute(
+            "UPDATE transfers SET status='canceled',finished_at=?2 WHERE id=?1 AND status!='success'",
+            params![id, Utc::now().to_rfc3339()],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn list_transfers(&self) -> Result<Vec<TransferRecord>, String> {
         let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
-        let mut stmt = db.prepare("SELECT id,kind,file_name,peer_name,progress,status,created_at FROM transfers ORDER BY created_at DESC")
+        let mut stmt = db.prepare("SELECT id,kind,file_name,peer_name,progress,status,created_at,total_bytes,transferred_bytes,finished_at FROM transfers ORDER BY created_at DESC")
             .map_err(|error| error.to_string())?;
         let rows = stmt
             .query_map([], |row| {
@@ -390,6 +451,9 @@ impl Database {
                     progress: row.get::<_, i64>(4)? as u8,
                     status: row.get(5)?,
                     created_at: row.get(6)?,
+                    total_bytes: row.get::<_, i64>(7)? as u64,
+                    transferred_bytes: row.get::<_, i64>(8)? as u64,
+                    finished_at: row.get(9)?,
                 })
             })
             .map_err(|error| error.to_string())?;
