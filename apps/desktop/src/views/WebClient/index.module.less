@@ -1,0 +1,382 @@
+.page {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 16px;
+  height: 100vh;
+  min-height: 620px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, 0.08), transparent 34%),
+    linear-gradient(315deg, rgba(37, 99, 235, 0.07), transparent 28%),
+    #eef2f7;
+}
+
+.desktopEmbedded {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.sidebar,
+.chat {
+  min-height: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.mobileTitle {
+  display: none;
+}
+
+.profile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.profileBody {
+  min-width: 0;
+}
+
+.label {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.deviceList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 14px;
+  overflow: auto;
+}
+
+.deviceButton {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.deviceButton:hover,
+.activeDevice {
+  background: #f0fdfa;
+  border-color: #99f6e4;
+}
+
+.deviceButton span {
+  min-width: 0;
+}
+
+.deviceButton strong,
+.deviceButton small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deviceButton small {
+  margin-top: 2px;
+  color: #64748b;
+}
+
+.chat {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.newMessageNotice {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  z-index: 2;
+  color: #0f766e;
+  box-shadow: 0 5px 18px rgba(15, 23, 42, 0.14);
+  transform: translateX(-50%);
+}
+
+.chatHeader {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.backButton {
+  display: none;
+  flex: 0 0 auto;
+}
+
+.chatPeer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.chatPeer h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatPeer p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.messageList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  overflow: auto;
+  background: #f8fafc;
+}
+
+.messageRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 72%;
+}
+
+.mine {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.messageMeta {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.bubble,
+.systemBubble {
+  padding: 10px 12px;
+  line-height: 1.6;
+  color: #0f172a;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.mine .bubble {
+  color: #ffffff;
+  background: #0f766e;
+  border-color: #0f766e;
+}
+
+.systemBubble {
+  font-size: 12px;
+  color: #64748b;
+  background: #f1f5f9;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.fileInput {
+  display: none;
+}
+
+.centerState {
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+  place-items: center;
+  background: #f8fafc;
+}
+
+.desktopCenterState {
+  height: 100%;
+  min-height: 0;
+}
+
+.uploadBubble {
+  width: min(360px, 70vw);
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+@media (max-width: 720px) {
+  .page {
+    display: block;
+    height: 100dvh;
+    min-height: 0;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  .sidebar,
+  .chat {
+    height: calc(100dvh - 16px);
+    border-radius: 8px;
+  }
+
+  .mobileList .chat {
+    display: none;
+  }
+
+  .mobileChat .sidebar {
+    display: none;
+  }
+
+  .mobileTitle {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 4px 2px 12px;
+  }
+
+  .mobileTitle h1 {
+    margin: 0;
+    font-size: 24px;
+    line-height: 1.15;
+    color: #0f172a;
+  }
+
+  .mobileTitle p {
+    margin: 6px 0 0;
+    font-size: 13px;
+    color: #64748b;
+  }
+
+  .sidebar {
+    gap: 12px;
+    padding: 14px;
+    overflow: auto;
+  }
+
+  .profile {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+  }
+
+  .deviceList {
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 0;
+    padding-bottom: 6px;
+    overflow: visible;
+  }
+
+  .deviceButton {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    width: 100%;
+    min-height: 64px;
+    padding: 12px;
+    background: #ffffff;
+    border-color: #e2e8f0;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+  }
+
+  .chatHeader {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .backButton {
+    display: inline-flex;
+  }
+
+  .chatPeer {
+    gap: 9px;
+  }
+
+  .chatPeer h1 {
+    max-width: 190px;
+    font-size: 16px;
+  }
+
+  .chatPeer p {
+    display: none;
+  }
+
+  .messageList {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .messageRow {
+    max-width: 92%;
+  }
+
+  .bubble,
+  .systemBubble {
+    padding: 9px 10px;
+  }
+
+  .composer {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 390px) {
+  .profile {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .profile > button {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .deviceButton {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .deviceButton > :global(.ant-tag) {
+    grid-column: 2;
+    justify-self: start;
+    margin-inline-end: 0;
+  }
+
+  .chatPeer h1 {
+    max-width: 150px;
+  }
+}

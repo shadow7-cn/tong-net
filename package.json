@@ -1,0 +1,14 @@
+{
+  "name": "tong-net",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w desktop",
+    "build": "npm run build -w desktop",
+    "preview": "npm run preview -w desktop",
+    "tauri": "npm run tauri -w desktop"
+  }
+}

@@ -1,0 +1,43 @@
+[package]
+name = "tong-net-desktop"
+version = "0.1.0"
+description = "同网互通桌面端"
+authors = ["tingxi"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "tong_net_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.8", features = ["multipart", "ws"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+local-ip-address = "0.6"
+futures-util = "0.3"
+http-body-util = "0.1"
+mime_guess = "2"
+dirs = "6"
+open = "5"
+urlencoding = "2"
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+tempfile = "3"
+tokio-tungstenite = "0.29"
