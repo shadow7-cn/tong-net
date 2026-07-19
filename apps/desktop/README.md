@@ -1,7 +1,5 @@
-# Tauri + React + Typescript
+# 同网互通桌面应用
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+此目录包含同网互通的 Tauri、React 和 Rust 桌面应用源码。
 
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+完整的项目说明、开发命令和开源协议请查看仓库根目录的 [README](../../README.md)。

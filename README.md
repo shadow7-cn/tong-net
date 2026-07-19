@@ -1,0 +1,149 @@
+# 同网互通
+
+<p align="center">
+  <img src="apps/desktop/public/brand/tong-net-logo.png" width="128" alt="同网互通 Logo" />
+</p>
+
+同网互通是一款免费、开源的局域网聊天与文件传输工具。一台 Windows 或 macOS 电脑开启服务后，手机、平板和其他电脑无需安装客户端，直接使用浏览器即可加入。
+
+所有消息、文件和记录都保存在主机电脑中，不需要账号、云服务或公网服务器。
+
+## 功能
+
+- 一键开启或停止局域网服务
+- 通过二维码或局域网地址加入
+- 浏览器端适配手机、平板和电脑
+- 按访问端建立一对一会话
+- 实时文字聊天与在线状态
+- 多文件上传、进度、速度、取消和重试
+- 上传中断后自动清理不完整文件
+- 下载支持 HTTP Range 断点续传
+- 微信内置浏览器可复制文件下载链接
+- 主机端支持选择文件另存路径
+- 本地保存访问端、聊天、文件和传输记录
+- 可移除离线访问端，历史记录仍然保留
+- 可选访问令牌；默认允许可信局域网内直接访问
+
+## 使用方式
+
+1. 在 Windows 或 macOS 电脑上打开同网互通。
+2. 点击“开启互通”。
+3. 其他设备扫描二维码，或在浏览器输入界面显示的局域网地址。
+4. 选择一个访问端，开始聊天或传输文件。
+
+浏览器直接访问 `http://主机局域网IP:端口/` 时，会自动进入 Web 端。
+
+> [!WARNING]
+> 默认开启无令牌访问，同一局域网中的任何设备都可以连接、聊天和传输文件。请仅在可信网络中使用；在公共 Wi-Fi 等环境中，请先在设置里关闭“允许无令牌访问”。本项目不提供公网访问、加密隧道或身份认证服务。
+
+## 工作原理
+
+同网互通采用主机中转模式，而不是浏览器之间直接 P2P 连接：
+
+```text
+浏览器访问端 A ─┐
+                 ├─ HTTP / WebSocket ─ 桌面主机 ─ SQLite + 本地文件
+浏览器访问端 B ─┘
+```
+
+- Tauri 桌面应用负责启动和停止局域网服务。
+- React Web 客户端由主机直接提供给其他设备。
+- REST API 处理设备、消息、文件和记录。
+- WebSocket 推送消息及在线状态变化。
+- 文件先完整上传到临时目录，成功后再移入保存目录。
+- 下载接口支持 `Range` 请求，可由浏览器继续未完成的下载。
+
+## 技术栈
+
+- Tauri 2
+- Rust、Axum、Tokio
+- React、TypeScript、Vite
+- Ant Design、Less、Lucide
+- Zustand、Axios
+- SQLite
+
+项目采用 npm workspaces 组织，目前桌面应用位于 `apps/desktop`。
+
+## 本地开发
+
+### 环境要求
+
+- Node.js 20 或更高版本
+- npm
+- Rust stable
+- Tauri 2 对应平台依赖
+
+具体系统依赖请参考 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)。
+
+### 安装依赖
+
+```bash
+npm install
+```
+
+### 启动桌面开发环境
+
+```bash
+npm run tauri -- dev
+```
+
+### 运行测试
+
+```bash
+npm test -w desktop
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+### 构建前端
+
+```bash
+npm run build
+```
+
+### 打包桌面应用
+
+```bash
+npm run tauri -- build
+```
+
+建议在目标操作系统上分别打包：Windows 生成 NSIS/MSI 安装包，macOS 生成 App/DMG。Windows MSI 需要在 Windows 环境中构建。
+
+## 数据位置
+
+- 收到的文件：默认保存在系统下载目录下的 `同网互通` 文件夹，可在设置中修改。
+- 聊天和传输记录：保存在主机本地 SQLite 数据库中。
+- 未完成上传：保存在临时目录，失败或取消时自动清理。
+
+同网互通不会主动上传遥测数据，也没有配套云端服务。卸载或清理应用数据前，请自行备份需要保留的记录和文件。
+
+## 当前限制
+
+- 上传不支持断点续传；下载支持断点续传。
+- 不支持群聊、广播和公网穿透。
+- 不提供用户账号、云同步和远程备份。
+- 同一设备使用不同浏览器或微信内置浏览器访问时，会被识别为不同访问端。
+- 浏览器和操作系统可能限制后台传输与下载行为。
+
+## 项目文档
+
+- [产品需求文档](docs/prd.md)
+- [技术设计文档](docs/trd.md)
+
+## 参与贡献
+
+欢迎提交 Issue、功能建议和 Pull Request。
+
+提交代码前请确保：
+
+```bash
+npm test -w desktop
+npm run build
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+请保持改动范围清晰，并为重要行为补充测试。安全问题请避免在公开 Issue 中披露可直接利用的细节。
+
+## 开源协议
+
+本项目使用 [MIT License](LICENSE)。你可以自由使用、修改和分发，但软件按“原样”提供，不附带任何形式的担保。
+
