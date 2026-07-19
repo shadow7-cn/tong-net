@@ -43,6 +43,23 @@ pub type ApiResult<T> = Result<T, (StatusCode, Json<Value>)>;
 #[folder = "../dist/"]
 struct WebAssets;
 
+pub fn ensure_web_assets_available(web_root: &std::path::Path) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    {
+        if !web_root.join("index.html").exists() {
+            return Err("Web 资源尚未构建，请先执行 npm run build".into());
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = web_root;
+        if WebAssets::get("index.html").is_none() {
+            return Err("安装包缺少 Web 资源，请重新下载安装".into());
+        }
+    }
+    Ok(())
+}
+
 fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "message": message.into() })))
 }
@@ -810,6 +827,10 @@ mod tests {
         let index = WebAssets::get("index.html").expect("release must embed index.html");
         assert!(index.data.starts_with(b"<!doctype html>"));
         assert!(WebAssets::iter().any(|path| path.starts_with("assets/")));
+        assert!(super::ensure_web_assets_available(std::path::Path::new(
+            "/path/that/does/not/exist"
+        ))
+        .is_ok());
     }
 
     #[test]

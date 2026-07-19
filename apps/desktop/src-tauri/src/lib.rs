@@ -5,7 +5,9 @@ mod server;
 use chrono::Utc;
 use config::{app_data_dir, load_settings, save_settings, AppSettings};
 use serde::Serialize;
-use server::{lan_ip, make_core, serve, serve_listener, ServerCore, ServiceInfo};
+use server::{
+    ensure_web_assets_available, lan_ip, make_core, serve, serve_listener, ServerCore, ServiceInfo,
+};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -135,9 +137,7 @@ async fn start_service(state: tauri::State<'_, AppRuntime>) -> Result<ServiceInf
     )?;
     let events = core.events.clone();
     let web_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist");
-    if !web_root.join("index.html").exists() {
-        return Err("Web 资源尚未构建，请先执行 npm run build".into());
-    }
+    ensure_web_assets_available(&web_root)?;
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", settings.port))
         .await
         .map_err(|error| format!("端口 {} 无法使用：{error}", settings.port))?;
