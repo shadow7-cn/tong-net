@@ -13,7 +13,7 @@ import styles from "./index.module.less";
 export default function DesktopHome() {
   const [api, contextHolder] = message.useMessage();
   const [qrUrl, setQrUrl] = useState("");
-  const { running, loading, lanUrl, port, startedAt, startService, stopService } = useServiceStore();
+  const { running, loading, lanUrl, port, tokenRequired, startedAt, startService, stopService } = useServiceStore();
   const devices = useDeviceStore((state) => state.devices);
   const loadDevices = useDeviceStore((state) => state.loadDevices);
   const transfers = useTransferStore((state) => state.transfers);
@@ -73,7 +73,14 @@ export default function DesktopHome() {
         </Space>
       </header>
 
-      <Alert className={styles.securityNotice} type="warning" showIcon message="仅在可信局域网中开启。访问地址包含临时令牌，请不要转发给不信任的人。" />
+      <Alert
+        className={styles.securityNotice}
+        type={tokenRequired ? "warning" : "error"}
+        showIcon
+        message={tokenRequired
+          ? "仅在可信局域网中开启。访问地址包含临时令牌，请不要转发给不信任的人。"
+          : "当前允许无令牌访问，同一局域网内的任何访问端都能连接、聊天和传输文件。"}
+      />
 
       <section className={styles.hero}>
         <div className={styles.statusPanel}>

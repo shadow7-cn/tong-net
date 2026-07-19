@@ -102,11 +102,6 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
       return;
     }
     saveDeviceName(nickname);
-    if (!getAccessToken()) {
-      setFatalError("访问地址缺少令牌，请重新扫描桌面端二维码或复制完整地址。");
-      setLoading(false);
-      return;
-    }
     getBootstrap().then(({ data }) => {
       setCurrentDevice(data.currentDevice);
       setCurrentDeviceId(data.currentDevice.id);
@@ -115,7 +110,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
       setDevices(data);
       setLoading(false);
     }).catch((error) => {
-      setFatalError(error.response?.data?.message ?? "无法连接同网互通主机");
+      setFatalError(error.response?.data?.message ?? (getAccessToken() ? "无法连接同网互通主机" : "访问地址缺少令牌，请重新扫描二维码，或让主机开启无令牌访问。"));
       setLoading(false);
     });
   }, [clientId, hostMode, serviceRunning]);

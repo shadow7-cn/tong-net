@@ -54,7 +54,15 @@ export default function Records() {
     { title: "文件名", dataIndex: "fileName" },
     { title: "方向", dataIndex: "kind", width: 100, render: (kind) => kind === "upload" ? "上传" : "下载" },
     { title: "对端访问端", dataIndex: "peerName" },
-    { title: "状态", dataIndex: "status", render: (status) => <Tag color={status === "failed" ? "red" : status === "success" ? "green" : "blue"}>{status === "failed" ? "失败" : status === "success" ? "完成" : "传输中"}</Tag> },
+    {
+      title: "状态",
+      dataIndex: "status",
+      render: (status) => {
+        const text = status === "failed" ? "失败" : status === "success" ? "完成" : status === "canceled" ? "已取消" : "传输中";
+        const color = status === "failed" ? "red" : status === "success" ? "green" : status === "canceled" ? "default" : "blue";
+        return <Tag color={color}>{text}</Tag>;
+      },
+    },
     { title: "时间", dataIndex: "createdAt", render: (value) => value ? formatDateTime(value) : "--" },
   ];
 

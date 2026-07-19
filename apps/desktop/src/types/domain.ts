@@ -58,6 +58,7 @@ export type ServiceInfo = {
   port: number;
   lanUrl: string;
   token: string;
+  tokenRequired: boolean;
   startedAt?: string;
 };
 
@@ -66,5 +67,6 @@ export type AppSettings = {
   port: number;
   saveDir: string;
   rotateToken: boolean;
+  allowTokenlessAccess: boolean;
   cleanupTemp: boolean;
 };

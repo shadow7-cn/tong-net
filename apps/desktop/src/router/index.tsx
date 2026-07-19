@@ -5,34 +5,39 @@ import NotFound from "@/views/NotFound";
 import Records from "@/views/Records";
 import Settings from "@/views/Settings";
 import WebClient from "@/views/WebClient";
+import { isTauri } from "@/api/service";
+import { getDefaultRoute } from "@/utils/route";
+
+function RootRedirect() {
+  return <Navigate to={getDefaultRoute(isTauri())} replace />;
+}
 
 export const router = createHashRouter([
+  {
+    path: "/",
+    element: <RootRedirect />,
+  },
   {
     path: "/web",
     element: <WebClient />,
   },
   {
-    path: "/",
     element: <AppLayout />,
     children: [
       {
-        index: true,
-        element: <Navigate to="/desktop" replace />,
-      },
-      {
-        path: "desktop",
+        path: "/desktop",
         element: <DesktopHome />,
       },
       {
-        path: "records",
+        path: "/records",
         element: <Records />,
       },
       {
-        path: "chat",
+        path: "/chat",
         element: <WebClient hostMode />,
       },
       {
-        path: "settings",
+        path: "/settings",
         element: <Settings />,
       },
     ],

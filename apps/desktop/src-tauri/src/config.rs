@@ -8,6 +8,8 @@ pub struct AppSettings {
     pub port: u16,
     pub save_dir: PathBuf,
     pub rotate_token: bool,
+    #[serde(default = "default_allow_tokenless_access")]
+    pub allow_tokenless_access: bool,
     pub cleanup_temp: bool,
 }
 
@@ -21,9 +23,14 @@ impl Default for AppSettings {
             port: 7878,
             save_dir,
             rotate_token: true,
+            allow_tokenless_access: true,
             cleanup_temp: true,
         }
     }
+}
+
+fn default_allow_tokenless_access() -> bool {
+    true
 }
 
 fn default_host_name() -> String {
@@ -51,4 +58,19 @@ pub fn save_settings(settings: &AppSettings) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let value = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
     fs::write(dir.join("settings.json"), value).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn existing_settings_enable_the_new_tokenless_default() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"hostName":"主机","port":7878,"saveDir":"/tmp","rotateToken":true,"cleanupTemp":true}"#,
+        )
+        .unwrap();
+
+        assert!(settings.allow_tokenless_access);
+    }
 }

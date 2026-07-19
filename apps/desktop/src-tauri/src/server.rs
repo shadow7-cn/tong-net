@@ -54,6 +54,7 @@ pub struct ServiceInfo {
     pub port: u16,
     pub lan_url: String,
     pub token: String,
+    pub token_required: bool,
     pub started_at: Option<String>,
 }
 
@@ -85,6 +86,9 @@ fn verify_token(
     headers: &HeaderMap,
     query_token: Option<&str>,
 ) -> ApiResult<()> {
+    if core.settings.allow_tokenless_access {
+        return Ok(());
+    }
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -748,13 +752,45 @@ pub fn make_core(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_router, make_core, parse_range};
+    use super::{build_router, make_core, parse_range, verify_token};
     use crate::config::AppSettings;
+    use axum::http::HeaderMap;
     use futures_util::StreamExt;
     use reqwest::{multipart, Client, StatusCode};
     use serde_json::Value;
     use std::fs;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn tokenless_access_only_bypasses_auth_when_enabled() {
+        let root = tempfile::tempdir().unwrap();
+        let core = make_core(
+            AppSettings {
+                save_dir: root.path().join("files"),
+                allow_tokenless_access: true,
+                ..AppSettings::default()
+            },
+            "secret".into(),
+            root.path().join("test.sqlite3"),
+            root.path().join("temp"),
+        )
+        .unwrap();
+        assert!(verify_token(&core, &HeaderMap::new(), None).is_ok());
+
+        let protected = make_core(
+            AppSettings {
+                save_dir: root.path().join("protected-files"),
+                allow_tokenless_access: false,
+                ..AppSettings::default()
+            },
+            "secret".into(),
+            root.path().join("protected.sqlite3"),
+            root.path().join("protected-temp"),
+        )
+        .unwrap();
+        assert!(verify_token(&protected, &HeaderMap::new(), None).is_err());
+    }
+
     #[test]
     fn parses_http_ranges() {
         assert_eq!(parse_range(None, 10), Ok((0, 9, false)));
@@ -777,6 +813,7 @@ mod tests {
             port: 7878,
             save_dir: save,
             rotate_token: true,
+            allow_tokenless_access: false,
             cleanup_temp: true,
         };
         let db_path = root.path().join("test.sqlite3");
@@ -1011,6 +1048,7 @@ mod tests {
             port,
             save_dir: root.path().join("files"),
             rotate_token: true,
+            allow_tokenless_access: false,
             cleanup_temp: true,
         };
         let core = make_core(

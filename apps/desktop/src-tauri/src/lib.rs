@@ -96,6 +96,7 @@ fn get_service_status(state: tauri::State<'_, AppRuntime>) -> Result<ServiceInfo
             port: settings.port,
             lan_url: String::new(),
             token: String::new(),
+            token_required: !settings.allow_tokenless_access,
             started_at: None,
         }))
 }
@@ -147,17 +148,17 @@ async fn start_service(state: tauri::State<'_, AppRuntime>) -> Result<ServiceInf
             eprintln!("同网互通服务退出：{error}");
         }
     });
-    let lan_url = format!(
-        "http://{}:{}/?token={}#/web",
-        lan_ip(),
-        settings.port,
-        token
-    );
+    let lan_url = if settings.allow_tokenless_access {
+        format!("http://{}:{}/", lan_ip(), settings.port)
+    } else {
+        format!("http://{}:{}/?token={}", lan_ip(), settings.port, token)
+    };
     let info = ServiceInfo {
         running: true,
         port: settings.port,
         lan_url,
         token,
+        token_required: !settings.allow_tokenless_access,
         started_at: Some(Utc::now().to_rfc3339()),
     };
     *state

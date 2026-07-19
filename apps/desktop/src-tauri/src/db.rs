@@ -108,6 +108,12 @@ impl Database {
         let now = Utc::now().to_rfc3339();
         connection
             .execute(
+                "UPDATE transfers SET status='failed', finished_at=?1 WHERE status='running'",
+                [&now],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
                 "INSERT INTO devices(id, client_id, name, kind, last_seen_at, created_at, browser_source, removed_at)
              VALUES('host', NULL, ?1, 'host', ?2, ?2, '桌面应用', NULL)
              ON CONFLICT(id) DO UPDATE SET name=excluded.name, browser_source='桌面应用', removed_at=NULL, last_seen_at=excluded.last_seen_at",
@@ -401,7 +407,7 @@ impl Database {
             "INSERT INTO transfers(id,kind,file_name,peer_name,progress,status,created_at,total_bytes,transferred_bytes,finished_at)
              VALUES(?1,?2,?3,?4,0,'running',?5,?6,0,NULL)
              ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,file_name=excluded.file_name,peer_name=excluded.peer_name,
-             progress=0,status='running',created_at=excluded.created_at,total_bytes=excluded.total_bytes,transferred_bytes=0,finished_at=NULL",
+             total_bytes=excluded.total_bytes WHERE transfers.status='running'",
             params![id, kind, file_name, peer_name, Utc::now().to_rfc3339(), total_bytes as i64],
         ).map_err(|error| error.to_string())?;
         Ok(())
@@ -511,5 +517,49 @@ impl Database {
             .map_err(|error| error.to_string())?;
         rows.map(|row| row.map_err(|error| error.to_string()))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Database;
+
+    #[test]
+    fn canceled_transfer_cannot_be_restarted_by_late_upload_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("test.sqlite3"), "测试主机").unwrap();
+        db.start_transfer("transfer-1", "upload", "初始名称", "本机", 100)
+            .unwrap();
+        db.cancel_transfer("transfer-1").unwrap();
+        db.start_transfer("transfer-1", "upload", "文件.mp4", "本机", 100)
+            .unwrap();
+
+        let record = db
+            .list_transfers()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == "transfer-1")
+            .unwrap();
+        assert_eq!(record.status, "canceled");
+    }
+
+    #[test]
+    fn unfinished_transfers_are_closed_when_service_restarts() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("test.sqlite3");
+        {
+            let db = Database::open(&path, "测试主机").unwrap();
+            db.start_transfer("transfer-2", "upload", "文件.mp4", "本机", 100)
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path, "测试主机").unwrap();
+        let record = reopened
+            .list_transfers()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == "transfer-2")
+            .unwrap();
+        assert_eq!(record.status, "failed");
     }
 }

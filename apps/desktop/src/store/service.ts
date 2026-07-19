@@ -10,7 +10,7 @@ type ServiceState = ServiceInfo & {
   stopService: () => Promise<void>;
 };
 
-const empty: ServiceInfo = { running: false, port: 7878, lanUrl: "", token: "" };
+const empty: ServiceInfo = { running: false, port: 7878, lanUrl: "", token: "", tokenRequired: true };
 
 const applyInfo = (info: ServiceInfo) => {
   if (info.running) configureDesktopService(info.port, info.token);

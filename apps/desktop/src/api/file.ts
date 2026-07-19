@@ -35,6 +35,8 @@ export function getDownloadUrl(fileId: string) {
   const configuredBase = typeof request.defaults.baseURL === "string" && request.defaults.baseURL.startsWith("http")
     ? request.defaults.baseURL.replace(/\/api\/?$/, "")
     : "";
-  const path = `/api/files/${fileId}/download?token=${encodeURIComponent(token)}&deviceId=${encodeURIComponent(deviceId)}`;
+  const query = new URLSearchParams({ deviceId });
+  if (token) query.set("token", token);
+  const path = `/api/files/${fileId}/download?${query.toString()}`;
   return new URL(path, configuredBase || window.location.origin).toString();
 }
