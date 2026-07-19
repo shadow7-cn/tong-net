@@ -14,6 +14,8 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
+#[cfg(not(debug_assertions))]
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -26,13 +28,20 @@ use tokio::{
     sync::{broadcast, oneshot},
 };
 use tokio_util::io::ReaderStream;
-use tower_http::{
-    cors::{Any, CorsLayer},
-    services::{ServeDir, ServeFile},
-};
+use tower_http::cors::{Any, CorsLayer};
+#[cfg(debug_assertions)]
+use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
+#[cfg(not(debug_assertions))]
+use axum::extract::OriginalUri;
+
 pub type ApiResult<T> = Result<T, (StatusCode, Json<Value>)>;
+
+#[cfg(not(debug_assertions))]
+#[derive(RustEmbed)]
+#[folder = "../dist/"]
+struct WebAssets;
 
 fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "message": message.into() })))
@@ -661,10 +670,33 @@ async fn socket_loop(core: Arc<ServerCore>, device: String, socket: WebSocket) {
     broadcast_refresh(&core, "device_offline");
 }
 
+#[cfg(not(debug_assertions))]
+async fn embedded_web(OriginalUri(uri): OriginalUri) -> Response {
+    let requested = uri.path().trim_start_matches('/');
+    let requested = if requested.is_empty() {
+        "index.html"
+    } else {
+        requested
+    };
+    let asset = WebAssets::get(requested)
+        .map(|asset| (requested, asset))
+        .or_else(|| WebAssets::get("index.html").map(|asset| ("index.html", asset)));
+    match asset {
+        Some((asset_path, asset)) => Response::builder()
+            .header(
+                header::CONTENT_TYPE,
+                mime_guess::from_path(asset_path)
+                    .first_or_octet_stream()
+                    .as_ref(),
+            )
+            .body(Body::from(asset.data.into_owned()))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 pub fn build_router(core: Arc<ServerCore>, web_root: PathBuf) -> Router {
-    let fallback =
-        ServeDir::new(&web_root).not_found_service(ServeFile::new(web_root.join("index.html")));
-    Router::new()
+    let router = Router::new()
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/devices", get(list_devices))
         .route("/api/devices/{id}", axum::routing::delete(remove_device))
@@ -678,8 +710,17 @@ pub fn build_router(core: Arc<ServerCore>, web_root: PathBuf) -> Router {
         .route("/api/transfers", get(transfers))
         .route("/api/transfers/{id}/cancel", post(cancel_transfer))
         .route("/api/records", get(records))
-        .route("/ws", get(websocket))
-        .fallback_service(fallback)
+        .route("/ws", get(websocket));
+    #[cfg(debug_assertions)]
+    let router = router.fallback_service(
+        ServeDir::new(&web_root).not_found_service(ServeFile::new(web_root.join("index.html"))),
+    );
+    #[cfg(not(debug_assertions))]
+    let router = {
+        let _ = web_root;
+        router.fallback(embedded_web)
+    };
+    router
         .layer(DefaultBodyLimit::disable())
         .layer(
             CorsLayer::new()
@@ -760,6 +801,16 @@ mod tests {
     use serde_json::Value;
     use std::fs;
     use tokio::io::AsyncWriteExt;
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn release_binary_embeds_the_web_client() {
+        use super::WebAssets;
+
+        let index = WebAssets::get("index.html").expect("release must embed index.html");
+        assert!(index.data.starts_with(b"<!doctype html>"));
+        assert!(WebAssets::iter().any(|path| path.starts_with("assets/")));
+    }
 
     #[test]
     fn tokenless_access_only_bypasses_auth_when_enabled() {

@@ -3,6 +3,8 @@ name = "tong-net-desktop"
 version = "0.1.0"
 description = "同网互通桌面端"
 authors = ["tingxi"]
+license = "MIT"
+repository = "https://github.com/shadow7-cn/tong-net"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -37,6 +39,7 @@ mime_guess = "2"
 dirs = "6"
 open = "5"
 urlencoding = "2"
+rust-embed = "8"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "multipart"] }

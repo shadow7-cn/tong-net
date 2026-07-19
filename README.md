@@ -108,6 +108,32 @@ npm run tauri -- build
 
 建议在目标操作系统上分别打包：Windows 生成 NSIS/MSI 安装包，macOS 生成 App/DMG。Windows MSI 需要在 Windows 环境中构建。
 
+## 发布新版本
+
+仓库提供 GitHub Actions 发布工作流。推送与应用版本一致的 `v*` 标签后，会自动生成：
+
+- Windows x64 NSIS 安装版 `setup.exe`
+- Windows x64 便携版 `portable.zip`
+- macOS Apple Silicon `dmg`
+- macOS Intel `dmg`
+
+发布前需要同步修改以下版本号：
+
+- `apps/desktop/src-tauri/tauri.conf.json`
+- `apps/desktop/src-tauri/Cargo.toml`
+- 根目录和桌面 workspace 的 `package.json`
+
+以 `0.1.0` 为例：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+构建完成后，产物会进入 GitHub Releases 的草稿版本。请先下载测试 Windows 和 macOS 安装包，再手动发布 Release。
+
+Windows 便携版仍依赖 Microsoft Edge WebView2 Runtime，Windows 10/11 通常已经自带。未配置代码签名时，Windows 和 macOS 可能显示未知发布者或安全提醒。
+
 ## 数据位置
 
 - 收到的文件：默认保存在系统下载目录下的 `同网互通` 文件夹，可在设置中修改。
@@ -146,4 +172,3 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 ## 开源协议
 
 本项目使用 [MIT License](LICENSE)。你可以自由使用、修改和分发，但软件按“原样”提供，不附带任何形式的担保。
-
