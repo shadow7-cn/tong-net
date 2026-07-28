@@ -82,7 +82,7 @@ export default function AppLayout() {
         <div className={styles.serviceBox}>
           <div className={styles.serviceLine}>
             <RadioTower size={16} />
-            <span>局域网服务</span>
+            <span>局域网中转站</span>
             <Tag color={running ? "green" : "default"}>{running ? "运行中" : "未开启"}</Tag>
           </div>
           <Button type={running ? "default" : "primary"} block loading={loading} onClick={toggle}>
