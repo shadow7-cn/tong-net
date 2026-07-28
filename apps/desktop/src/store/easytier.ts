@@ -30,7 +30,7 @@ export const useEasyTierStore = create<EasyTierState>((set) => ({
   loading: false,
   refresh: async () => set(await getEasyTierStatus()),
   connect: async (config) => {
-    set({ loading: true });
+    set({ loading: true, phase: "正在准备系统服务" });
     try {
       set({ ...(await startEasyTier(config)), loading: false });
     } catch (error) {
@@ -39,7 +39,7 @@ export const useEasyTierStore = create<EasyTierState>((set) => ({
     }
   },
   disconnect: async () => {
-    set({ loading: true });
+    set({ loading: true, phase: "正在断开" });
     try {
       set({ ...(await stopEasyTier()), loading: false });
     } catch (error) {

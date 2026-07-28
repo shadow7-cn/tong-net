@@ -1,4 +1,5 @@
 use crate::config::app_data_dir;
+use crate::easytier_service::{self, ServiceNetworkConfig};
 use aes_gcm::{
     aead::{rand_core::RngCore, Aead, OsRng},
     Aes256Gcm, KeyInit, Nonce,
@@ -8,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -81,7 +82,7 @@ pub struct EasyTierStatus {
 }
 
 struct EasyTierInner {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     child: Option<CommandChild>,
     running: bool,
     phase: String,
@@ -103,7 +104,7 @@ impl Default for EasyTierRuntime {
     fn default() -> Self {
         Self {
             inner: Arc::new(Mutex::new(EasyTierInner {
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 child: None,
                 running: false,
                 phase: "未连接".into(),
@@ -415,13 +416,8 @@ fn is_easytier_process(pid: u32) -> bool {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn kill_process(pid: u32) -> Result<(), String> {
-    #[cfg(windows)]
-    let status = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .status();
-    #[cfg(all(unix, not(target_os = "macos")))]
     let status = std::process::Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status();
@@ -531,124 +527,6 @@ pub fn get_easytier_status(
     Ok(status_from_inner(&inner))
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-#[cfg(target_os = "macos")]
-async fn run_admin_shell(command: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let script = format!(
-            "do shell script {} with administrator privileges",
-            serde_json::to_string(&command).map_err(|error| error.to_string())?
-        );
-        let output = std::process::Command::new("/usr/bin/osascript")
-            .args(["-e", &script])
-            .output()
-            .map_err(|error| format!("无法打开 macOS 管理员授权：{error}"))?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-        }
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[cfg(target_os = "macos")]
-async fn start_macos(
-    state: &tauri::State<'_, EasyTierRuntime>,
-    config: &EasyTierConfig,
-) -> Result<(), String> {
-    let runtime_dir = app_data_dir().join("easytier-runtime");
-    std::fs::create_dir_all(&runtime_dir).map_err(|error| error.to_string())?;
-    let (pid_path, log_path, secret_path) = runtime_paths();
-    let peers = peers_for_address(&config.server_address)?;
-    std::fs::write(&secret_path, &config.network_secret).map_err(|error| error.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|error| error.to_string())?;
-    }
-
-    let mut parts = vec![
-        format!(
-            "ET_NETWORK_SECRET=$(cat {})",
-            shell_quote(&secret_path.to_string_lossy())
-        ),
-        shell_quote(&bundled_binary_path("easytier-core")?.to_string_lossy()),
-        "--network-name".into(),
-        shell_quote(config.network_name.trim()),
-        "--dhcp true".into(),
-        "--hostname".into(),
-        shell_quote(config.device_name.trim()),
-        "--no-listener".into(),
-        "--rpc-portal 127.0.0.1:17282".into(),
-    ];
-    for peer in peers {
-        parts.push("--peers".into());
-        parts.push(shell_quote(&peer));
-    }
-    parts.push(format!(
-        "</dev/null >{} 2>&1 & CORE_PID=$!; echo $CORE_PID >{}; rm -f {}; (while kill -0 {} 2>/dev/null && kill -0 $CORE_PID 2>/dev/null; do sleep 1; done; kill -TERM $CORE_PID 2>/dev/null || true; sleep 1; kill -KILL $CORE_PID 2>/dev/null || true; rm -f {}) </dev/null >/dev/null 2>&1 &",
-        shell_quote(&log_path.to_string_lossy()),
-        shell_quote(&pid_path.to_string_lossy()),
-        shell_quote(&secret_path.to_string_lossy()),
-        std::process::id(),
-        shell_quote(&pid_path.to_string_lossy())
-    ));
-    let result = run_admin_shell(parts.join(" ")).await;
-    if result.is_err() {
-        let _ = std::fs::remove_file(&secret_path);
-        return result;
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| "EasyTier 状态不可用".to_string())?;
-    inner.running = true;
-    inner.phase = "正在连接".into();
-    inner.network_name = config.network_name.trim().into();
-    inner.device_name = config.device_name.trim().into();
-    inner.virtual_ip.clear();
-    inner.members.clear();
-    inner.ever_connected = false;
-    inner.logs.clear();
-    inner.log_path = Some(log_path);
-    inner.pid_path = Some(pid_path);
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_windows_exit_watcher(app_pid: u32, core_pid: u32) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-
-    let script = format!(
-        "while (Get-Process -Id {app_pid} -ErrorAction SilentlyContinue) {{ \
-         if (-not (Get-Process -Id {core_pid} -ErrorAction SilentlyContinue)) {{ exit }}; \
-         Start-Sleep -Milliseconds 500 }}; \
-         Stop-Process -Id {core_pid} -Force -ErrorAction SilentlyContinue"
-    );
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    std::process::Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            &script,
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("无法启动 EasyTier 退出监视器：{error}"))
-}
-
 #[tauri::command]
 pub async fn start_easytier(
     _app: tauri::AppHandle,
@@ -669,15 +547,47 @@ pub async fn start_easytier(
     }
     save_config(&config)?;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        start_macos(&state, &config).await?;
+        let runtime_dir = app_data_dir().join("easytier-runtime");
+        easytier_service::ensure_installed(
+            bundled_binary_path("easytier-core")?,
+            runtime_dir.clone(),
+        )
+        .await?;
+        easytier_service::start(
+            &runtime_dir,
+            ServiceNetworkConfig {
+                network_name: config.network_name.clone(),
+                network_secret: config.network_secret.clone(),
+                device_name: config.device_name.clone(),
+                server_address: config.server_address.clone(),
+            },
+        )?;
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        let (pid_path, log_path, _) = runtime_paths();
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "EasyTier 状态不可用".to_string())?;
+        inner.running = true;
+        inner.phase = "正在连接".into();
+        inner.network_name = config.network_name.trim().into();
+        inner.device_name = config.device_name.trim().into();
+        inner.virtual_ip.clear();
+        inner.members.clear();
+        inner.ever_connected = false;
+        inner.logs.clear();
+        inner.log_path = Some(log_path);
+        inner.pid_path = Some(pid_path);
+        push_log(&mut inner, "已通过特权服务启动 EasyTier Core".into());
+        drop(inner);
         get_easytier_status(state)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let peers = peers_for_address(&config.server_address)?;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut args = vec![
         "--network-name".to_string(),
         config.network_name.trim().to_string(),
@@ -689,36 +599,30 @@ pub async fn start_easytier(
         "--rpc-portal".to_string(),
         "127.0.0.1:17282".to_string(),
     ];
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     for peer in peers {
         args.push("--peers".into());
         args.push(peer);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let command = _app
         .shell()
         .sidecar("easytier-core")
         .map_err(|error| format!("无法加载内置 EasyTier Core：{error}"))?
         .args(args)
         .env("ET_NETWORK_SECRET", config.network_secret);
-    #[cfg(not(target_os = "macos"))]
-    let (mut receiver, mut child) = command
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (mut receiver, child) = command
         .spawn()
         .map_err(|error| format!("无法启动内置 EasyTier Core：{error}"))?;
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let core_pid = child.pid();
         let (pid_path, _, _) = runtime_paths();
         std::fs::create_dir_all(pid_path.parent().unwrap()).map_err(|error| error.to_string())?;
         std::fs::write(&pid_path, core_pid.to_string()).map_err(|error| error.to_string())?;
-        #[cfg(target_os = "windows")]
-        if let Err(error) = spawn_windows_exit_watcher(std::process::id(), core_pid) {
-            let _ = child.kill();
-            let _ = std::fs::remove_file(&pid_path);
-            return Err(error);
-        }
 
         let mut inner = state
             .inner
@@ -737,9 +641,9 @@ pub async fn start_easytier(
         push_log(&mut inner, "已启动同网互通内置 EasyTier Core".into());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let runtime = state.inner.clone();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     tauri::async_runtime::spawn(async move {
         while let Some(event) = receiver.recv().await {
             let mut inner = match runtime.lock() {
@@ -775,7 +679,7 @@ pub async fn start_easytier(
         }
     });
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     get_easytier_status(state)
 }
 
@@ -783,22 +687,17 @@ pub async fn start_easytier(
 pub async fn stop_easytier(
     state: tauri::State<'_, EasyTierRuntime>,
 ) -> Result<EasyTierStatus, String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        let pid_path = state
-            .inner
-            .lock()
-            .map_err(|_| "EasyTier 状态不可用".to_string())?
-            .pid_path
-            .clone();
-        if let Some(path) = pid_path {
-            let command = format!(
-                "PID=$(cat {}); kill -TERM $PID 2>/dev/null || true; sleep 1; kill -KILL $PID 2>/dev/null || true; rm -f {}",
-                shell_quote(&path.to_string_lossy()),
-                shell_quote(&path.to_string_lossy())
-            );
-            run_admin_shell(command).await?;
+        let runtime_dir = app_data_dir().join("easytier-runtime");
+        if easytier_service::status(&runtime_dir).is_err() {
+            easytier_service::ensure_installed(
+                bundled_binary_path("easytier-core")?,
+                runtime_dir.clone(),
+            )
+            .await?;
         }
+        easytier_service::stop(&runtime_dir)?;
         let mut inner = state
             .inner
             .lock()
@@ -813,7 +712,7 @@ pub async fn stop_easytier(
         Ok(status_from_inner(&inner))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut inner = state
             .inner
@@ -858,7 +757,15 @@ fn validate_config(config: &EasyTierConfig) -> Result<(), String> {
 }
 
 pub fn cleanup_on_exit(_runtime: &EasyTierRuntime) {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let _ = easytier_service::stop(&app_data_dir().join("easytier-runtime"));
+        if let Ok(mut inner) = _runtime.inner.lock() {
+            inner.running = false;
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     if let Ok(mut inner) = _runtime.inner.lock() {
         let managed_child = inner.child.is_some();
         if let Some(child) = inner.child.take() {
@@ -979,7 +886,7 @@ mod tests {
     #[test]
     fn reports_reconnecting_after_a_connected_network_loses_its_ip() {
         let mut inner = EasyTierInner {
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             child: None,
             running: true,
             phase: "正在连接".into(),
@@ -1018,7 +925,7 @@ mod tests {
         std::fs::write(&pid_path, child.id().to_string()).unwrap();
 
         let mut inner = EasyTierInner {
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             child: None,
             running: false,
             phase: "未连接".into(),
@@ -1053,7 +960,7 @@ mod tests {
         let pid_path = directory.path().join("core.pid");
         std::fs::write(&pid_path, std::process::id().to_string()).unwrap();
         let mut inner = EasyTierInner {
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             child: None,
             running: false,
             phase: "未连接".into(),

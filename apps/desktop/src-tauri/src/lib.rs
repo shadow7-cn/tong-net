@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod easytier;
+mod easytier_service;
 mod server;
 
 use chrono::Utc;
@@ -399,6 +400,10 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+pub fn run_easytier_service_from_args() -> Option<i32> {
+    easytier_service::run_from_args()
 }
 
 pub async fn run_standalone(
