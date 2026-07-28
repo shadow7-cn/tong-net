@@ -78,6 +78,7 @@ jobs:
             请根据操作系统下载对应安装包。
 
             Windows 用户可选择安装版 setup.exe，或下载 portable.zip 解压后直接运行。
+            首次启用虚拟局域网时，系统会请求管理员权限安装 EasyTier 后台服务；安装完成后，连接和断开不再重复授权。
             当前版本尚未进行商业代码签名，系统可能显示未知发布者或安全提醒。
           releaseDraft: true
           prerelease: false
@@ -103,6 +104,7 @@ jobs:
           3. 程序依赖 Microsoft Edge WebView2 Runtime；Windows 10/11 通常已自带。
           4. 当前版本未进行商业代码签名，Windows 可能显示未知发布者提示。
           5. 请仅在可信局域网中开启无令牌访问。
+          6. 首次启用虚拟局域网时，Windows 会请求管理员权限安装 EasyTier 后台服务。
           "@ | Set-Content -Encoding utf8 (Join-Path $folder "README.txt")
           $zip = "portable/$folderName.zip"
           Compress-Archive -Path "$folder/*" -DestinationPath $zip -CompressionLevel Optimal

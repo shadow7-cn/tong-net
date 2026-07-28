@@ -4,9 +4,9 @@
   <img src="apps/desktop/public/brand/tong-net-logo.png" width="128" alt="同网互通 Logo" />
 </p>
 
-同网互通是一款免费、开源的局域网聊天与文件传输工具。一台 Windows 或 macOS 电脑开启服务后，手机、平板和其他电脑无需安装客户端，直接使用浏览器即可加入。
+同网互通是一款免费、开源的设备聊天与文件传输工具。在同一局域网内，一台 Windows 或 macOS 电脑开启服务后，手机、平板和其他电脑无需安装客户端，直接使用浏览器即可加入。
 
-所有消息、文件和记录都保存在主机电脑中，不需要账号、云服务或公网服务器。
+需要跨网络连接时，可以使用应用内置的 EasyTier Core 接入自建虚拟局域网。所有消息、文件和记录仍保存在自己的主机电脑中：局域网模式不需要账号、云服务或公网服务器；虚拟局域网模式需要自行准备 EasyTier 网络或服务器。
 
 ## 使用者指南
 
@@ -62,6 +62,14 @@ sudo xattr -cr "/Applications/同网互通.app"
 
 浏览器直接访问 `http://主机局域网IP:端口/` 时，会自动进入 Web 端。
 
+#### 通过虚拟局域网连接
+
+1. 在左侧进入“虚拟局域网”。
+2. 填写 EasyTier 网络名称、网络密码、自己的设备名称和服务器地址。
+3. 点击“连接虚拟局域网”。
+4. 连接成功后，回到 App 端首页，切换到虚拟局域网地址或二维码。
+5. 其他已经加入同一 EasyTier 网络的设备，可以通过该地址访问同网互通。
+
 #### 首次启用虚拟局域网
 
 首次连接虚拟局域网时，系统会请求一次管理员权限，用于安装“同网互通 EasyTier 服务”。安装完成后，连接和断开虚拟局域网不再重复要求管理员密码。
@@ -112,6 +120,23 @@ sudo xattr -cr "/Applications/同网互通.app"
 - WebSocket 推送消息及在线状态变化。
 - 文件先完整上传到临时目录，成功后再移入保存目录。
 - 下载接口支持 `Range` 请求，可由浏览器继续未完成的下载。
+- 接入 EasyTier 后，同一套 HTTP / WebSocket 服务也可以通过 EasyTier 虚拟 IP 访问。
+
+EasyTier Core 需要创建虚拟网卡，因此通过独立系统服务管理：
+
+```text
+同网互通（普通用户）
+        │ 本机鉴权 IPC：127.0.0.1:17283
+        ▼
+EasyTier 系统服务（管理员权限）
+        │ 启动、停止和监控
+        ▼
+EasyTier Core
+```
+
+- macOS 使用 LaunchDaemon，Windows 使用 Windows Service。
+- 首次连接时安装服务，后续连接和断开无需重复授权。
+- App 退出或异常结束后，系统服务会停止本次启动的 EasyTier Core。
 
 ### 技术栈
 
@@ -121,6 +146,8 @@ sudo xattr -cr "/Applications/同网互通.app"
 - Ant Design、Less、Lucide
 - Zustand、Axios
 - SQLite
+- EasyTier Core
+- macOS LaunchDaemon、Windows Service
 
 项目采用 npm workspaces 组织，目前桌面应用位于 `apps/desktop`。
 
@@ -163,10 +190,13 @@ npm run build
 #### 打包桌面应用
 
 ```bash
+npm run prepare:easytier
 npm run tauri -- build
 ```
 
-建议在目标操作系统上分别打包：Windows 生成 NSIS/MSI 安装包，macOS 生成 App/DMG。Windows MSI 需要在 Windows 环境中构建。
+`prepare:easytier` 会下载当前平台对应的 EasyTier Core，并在打包前完成校验。产物位于 `apps/desktop/src-tauri/target/release/bundle/`。
+
+建议在目标操作系统上分别打包：Windows 生成 NSIS 安装包，macOS 生成 App/DMG。跨平台正式产物可以交给下方的 GitHub Actions 工作流构建。
 
 ### 发布新版本
 
@@ -183,14 +213,26 @@ npm run tauri -- build
 - `apps/desktop/src-tauri/Cargo.toml`
 - 根目录和桌面 workspace 的 `package.json`
 
-以 `0.1.0` 为例：
+修改版本号后，执行一次 `npm install --package-lock-only`，让 `package-lock.json` 同步更新。以发布 `0.1.2` 为例：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+npm install --package-lock-only
+npm run prepare:easytier
+npm test -w desktop
+npm run build
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+git add README.md package.json package-lock.json apps/desktop/package.json \
+  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
+  apps/desktop/src-tauri/tauri.conf.json
+git commit -m "chore: release v0.1.2"
+git push origin main
+
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
-构建完成后，产物会进入 GitHub Releases 的草稿版本。请先下载测试 Windows 和 macOS 安装包，再手动发布 Release。
+标签中的版本必须与 `tauri.conf.json` 完全一致，否则工作流会主动失败。构建开始后，可以在仓库的 **Actions** 页面查看进度；完成后，产物会进入 GitHub **Releases** 的草稿版本。请先下载测试 Windows 和 macOS 安装包，确认可以启动服务和连接虚拟局域网，再点击 **Publish release**。
 
 Windows 便携版仍依赖 Microsoft Edge WebView2 Runtime，Windows 10/11 通常已经自带。未配置代码签名时，Windows 和 macOS 可能显示未知发布者或安全提醒。
 
