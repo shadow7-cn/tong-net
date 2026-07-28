@@ -54,6 +54,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Prepare bundled EasyTier Core
+        run: npm run prepare:easytier
+
       - name: Verify release tag
         shell: bash
         run: |

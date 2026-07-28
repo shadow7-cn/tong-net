@@ -1,1 +1,3 @@
 node_modules
+apps/desktop/src-tauri/binaries/easytier-core-*
+apps/desktop/src-tauri/binaries/easytier-cli-*

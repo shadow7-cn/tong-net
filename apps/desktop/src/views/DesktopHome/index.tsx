@@ -1,40 +1,59 @@
 import { useEffect, useState } from "react";
-import { Alert, Badge, Button, Empty, Input, Popconfirm, Space, Tag, Tooltip, message } from "antd";
+import { Alert, Badge, Button, Empty, Input, Popconfirm, Space, Tabs, Tag, Tooltip, message } from "antd";
 import QRCode from "qrcode";
-import { CheckCircle2, Copy, FolderOpen, Play, QrCode, Square, Trash2, Wifi } from "lucide-react";
+import { CheckCircle2, Copy, FolderOpen, Network, Play, QrCode, Square, Trash2, Wifi } from "lucide-react";
 import DeviceAvatar from "@/components/DeviceAvatar";
 import TransferProgress from "@/components/TransferProgress";
-import { useDeviceStore, useServiceStore, useTransferStore, useUnreadStore } from "@/store";
+import { useDeviceStore, useEasyTierStore, useServiceStore, useTransferStore, useUnreadStore } from "@/store";
 import { openSaveDirectory } from "@/api/service";
 import { removeDevice } from "@/api/device";
 import { formatDateTime } from "@/utils/time";
+import { buildAccessUrl } from "@/utils/accessUrl";
 import styles from "./index.module.less";
 
 export default function DesktopHome() {
   const [api, contextHolder] = message.useMessage();
   const [qrUrl, setQrUrl] = useState("");
-  const { running, loading, lanUrl, port, tokenRequired, startedAt, startService, stopService } = useServiceStore();
+  const [qrMode, setQrMode] = useState<"lan" | "virtual">("lan");
+  const { running, loading, lanUrl, port, token, tokenRequired, startedAt, startService, stopService } = useServiceStore();
+  const easyTierConnected = useEasyTierStore((state) => state.connected);
+  const easyTierVirtualIp = useEasyTierStore((state) => state.virtualIp);
+  const refreshEasyTier = useEasyTierStore((state) => state.refresh);
   const devices = useDeviceStore((state) => state.devices);
   const loadDevices = useDeviceStore((state) => state.loadDevices);
   const transfers = useTransferStore((state) => state.transfers);
   const loadTransfers = useTransferStore((state) => state.loadTransfers);
   const unreadByPeer = useUnreadStore((state) => state.unreadByPeer);
   const onlineCount = devices.filter((device) => device.status === "online").length;
+  const virtualLanUrl = running && easyTierConnected
+    ? buildAccessUrl(easyTierVirtualIp, port, token, tokenRequired)
+    : "";
+  const qrTarget = qrMode === "virtual" ? virtualLanUrl : lanUrl;
 
-  const copyUrl = async () => {
-    if (!lanUrl) return;
-    await navigator.clipboard.writeText(lanUrl);
-    api.success("局域网地址已复制");
+  const copyUrl = async (url: string, label: string) => {
+    if (!url) return;
+    await navigator.clipboard.writeText(url);
+    api.success(`${label}已复制`);
   };
 
   useEffect(() => {
-    if (!running) { setQrUrl(""); return; }
-    QRCode.toDataURL(lanUrl, { width: 196, margin: 1, errorCorrectionLevel: "M" }).then(setQrUrl).catch(() => setQrUrl(""));
+    if (!running || !qrTarget) { setQrUrl(""); return; }
+    QRCode.toDataURL(qrTarget, { width: 196, margin: 1, errorCorrectionLevel: "M" }).then(setQrUrl).catch(() => setQrUrl(""));
     const refresh = () => Promise.all([loadDevices(), loadTransfers()]).catch(() => undefined);
     void refresh();
     const timer = window.setInterval(refresh, 3000);
     return () => window.clearInterval(timer);
-  }, [lanUrl, loadDevices, loadTransfers, running]);
+  }, [loadDevices, loadTransfers, qrTarget, running]);
+
+  useEffect(() => {
+    void refreshEasyTier().catch(() => undefined);
+    const timer = window.setInterval(() => void refreshEasyTier().catch(() => undefined), 1500);
+    return () => window.clearInterval(timer);
+  }, [refreshEasyTier]);
+
+  useEffect(() => {
+    if (!virtualLanUrl && qrMode === "virtual") setQrMode("lan");
+  }, [qrMode, virtualLanUrl]);
 
   const toggleService = async () => {
     try {
@@ -90,11 +109,30 @@ export default function DesktopHome() {
             <span>{running ? "局域网服务运行中" : "局域网服务未开启"}</span>
             <Tag color={running ? "green" : "default"}>端口 {port}</Tag>
           </div>
-          <div className={styles.urlRow}>
-            <Input value={lanUrl} readOnly placeholder="开启服务后生成局域网地址" />
-            <Tooltip title="复制地址">
-              <Button icon={<Copy size={16} />} onClick={copyUrl} />
-            </Tooltip>
+          <div className={styles.addressList}>
+            <div className={styles.urlRow}>
+              <span>局域网地址</span>
+              <Input value={lanUrl} readOnly disabled={!running} placeholder="开启服务后生成局域网地址" />
+              <Tooltip title="复制局域网地址">
+                <Button icon={<Copy size={16} />} disabled={!lanUrl} onClick={() => void copyUrl(lanUrl, "局域网地址")} />
+              </Tooltip>
+            </div>
+            <div className={styles.urlRow}>
+              <span>虚拟局域网地址</span>
+              <Input
+                value={virtualLanUrl}
+                readOnly
+                disabled={!virtualLanUrl}
+                placeholder={running ? "连接虚拟局域网并获取 IP 后可用" : "请先开启互通服务"}
+              />
+              <Tooltip title="复制虚拟局域网地址">
+                <Button
+                  icon={<Copy size={16} />}
+                  disabled={!virtualLanUrl}
+                  onClick={() => void copyUrl(virtualLanUrl, "虚拟局域网地址")}
+                />
+              </Tooltip>
+            </div>
           </div>
           <div className={styles.metrics}>
             <div>
@@ -116,7 +154,21 @@ export default function DesktopHome() {
             <QrCode size={18} />
             手机扫码进入
           </div>
-          {qrUrl ? <img className={styles.qrImage} src={qrUrl} alt="局域网访问二维码" /> : <div className={styles.qrPlaceholder}><QrCode size={44} /></div>}
+          <Tabs
+            size="small"
+            activeKey={qrMode}
+            onChange={(key) => setQrMode(key as "lan" | "virtual")}
+            centered
+            items={[
+              { key: "lan", label: "局域网" },
+              {
+                key: "virtual",
+                label: <Space size={4}><Network size={13} />虚拟局域网</Space>,
+                disabled: !virtualLanUrl,
+              },
+            ]}
+          />
+          {qrUrl ? <img className={styles.qrImage} src={qrUrl} alt={`${qrMode === "virtual" ? "虚拟局域网" : "局域网"}访问二维码`} /> : <div className={styles.qrPlaceholder}><QrCode size={44} /></div>}
           <p>二维码会携带本次会话访问令牌。</p>
         </div>
       </section>

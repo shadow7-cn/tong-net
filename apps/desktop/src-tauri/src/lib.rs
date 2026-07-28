@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod easytier;
 mod server;
 
 use chrono::Utc;
@@ -16,7 +17,7 @@ use std::{
         Arc, Mutex,
     },
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -372,7 +373,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(AppRuntime::default())
+        .manage(easytier::EasyTierRuntime::default())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -381,8 +384,19 @@ pub fn run() {
             stop_service,
             open_save_directory,
             save_file_as,
-            cancel_native_transfer
+            cancel_native_transfer,
+            easytier::get_easytier_config,
+            easytier::save_easytier_config,
+            easytier::get_easytier_status,
+            easytier::start_easytier,
+            easytier::stop_easytier
         ])
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let runtime = window.state::<easytier::EasyTierRuntime>();
+                easytier::cleanup_on_exit(&runtime);
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

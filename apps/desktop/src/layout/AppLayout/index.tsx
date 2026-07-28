@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Badge, Button, Layout, Menu, Tag, message } from "antd";
-import { History, MessageCircle, MonitorCog, RadioTower, Settings } from "lucide-react";
+import { History, MessageCircle, MonitorCog, Network, RadioTower, Settings } from "lucide-react";
 import { listDevices } from "@/api/device";
 import { useLanSocket } from "@/hooks/useLanSocket";
 import { setCurrentDeviceId } from "@/http";
@@ -51,6 +51,7 @@ export default function AppLayout() {
       icon: <MessageCircle size={17} />,
       label: <span className={styles.menuLabel}>访问端会话<Badge count={totalUnread} overflowCount={99} size="small" /></span>,
     },
+    { key: "/virtual-lan", icon: <Network size={17} />, label: "虚拟局域网" },
     { key: "/records", icon: <History size={17} />, label: "记录" },
     { key: "/settings", icon: <Settings size={17} />, label: "设置" },
   ];

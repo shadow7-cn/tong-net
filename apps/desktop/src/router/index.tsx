@@ -5,6 +5,7 @@ import NotFound from "@/views/NotFound";
 import Records from "@/views/Records";
 import Settings from "@/views/Settings";
 import WebClient from "@/views/WebClient";
+import VirtualLan from "@/views/VirtualLan";
 import { isTauri } from "@/api/service";
 import { getDefaultRoute } from "@/utils/route";
 
@@ -31,6 +32,10 @@ export const router = createHashRouter([
       {
         path: "/records",
         element: <Records />,
+      },
+      {
+        path: "/virtual-lan",
+        element: <VirtualLan />,
       },
       {
         path: "/chat",
