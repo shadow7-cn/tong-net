@@ -5,7 +5,7 @@ import { resolveLanSocketUrl } from "./socket";
 describe("chat behavior", () => {
   it("uses the configured LAN service for the desktop WebSocket", () => {
     expect(resolveLanSocketUrl(
-      "http://localhost:1420/#/chat",
+      "http://localhost:17281/#/chat",
       "http://127.0.0.1:7878/api",
       "token value",
       "host",
