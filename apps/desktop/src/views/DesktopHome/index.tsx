@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Empty, Input, Popconfirm, Space, Tag, Tooltip, message } from "antd";
+import { Alert, Badge, Button, Empty, Input, Popconfirm, Space, Tag, Tooltip, message } from "antd";
 import QRCode from "qrcode";
 import { CheckCircle2, Copy, FolderOpen, Play, QrCode, Square, Trash2, Wifi } from "lucide-react";
 import DeviceAvatar from "@/components/DeviceAvatar";
 import TransferProgress from "@/components/TransferProgress";
-import { useDeviceStore, useServiceStore, useTransferStore } from "@/store";
+import { useDeviceStore, useServiceStore, useTransferStore, useUnreadStore } from "@/store";
 import { openSaveDirectory } from "@/api/service";
 import { removeDevice } from "@/api/device";
 import { formatDateTime } from "@/utils/time";
@@ -18,6 +18,7 @@ export default function DesktopHome() {
   const loadDevices = useDeviceStore((state) => state.loadDevices);
   const transfers = useTransferStore((state) => state.transfers);
   const loadTransfers = useTransferStore((state) => state.loadTransfers);
+  const unreadByPeer = useUnreadStore((state) => state.unreadByPeer);
   const onlineCount = devices.filter((device) => device.status === "online").length;
 
   const copyUrl = async () => {
@@ -130,7 +131,9 @@ export default function DesktopHome() {
             {devices.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={running ? "暂无访问端" : "服务未开启"} />}
             {devices.map((device) => (
               <div key={device.id} className={styles.deviceItem}>
-                <DeviceAvatar device={device} />
+                <Badge count={unreadByPeer[device.id] ?? 0} overflowCount={99} size="small">
+                  <DeviceAvatar device={device} />
+                </Badge>
                 <div>
                   <div className={styles.deviceName}>{device.name}</div>
                   <div className={styles.deviceMeta}>{device.kind === "host" ? "本机主机" : device.browserSource}</div>

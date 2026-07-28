@@ -64,13 +64,26 @@ fn update_settings(
     if settings.host_name.trim().is_empty() {
         return Err("本机主机名称不能为空".into());
     }
-    if state
+    let service_running = state
         .service
         .lock()
         .map_err(|_| "服务状态不可用".to_string())?
-        .is_some()
-    {
-        return Err("请先停止互通服务再修改设置".into());
+        .is_some();
+    if service_running {
+        let current = state
+            .settings
+            .lock()
+            .map_err(|_| "设置不可用".to_string())?
+            .clone();
+        let service_settings_changed = current.host_name != settings.host_name
+            || current.port != settings.port
+            || current.save_dir != settings.save_dir
+            || current.rotate_token != settings.rotate_token
+            || current.allow_tokenless_access != settings.allow_tokenless_access
+            || current.cleanup_temp != settings.cleanup_temp;
+        if service_settings_changed {
+            return Err("互通服务运行时，只能修改自动开启设置".into());
+        }
     }
     save_settings(&settings)?;
     *state

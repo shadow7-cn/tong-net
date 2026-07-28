@@ -1,5 +1,5 @@
 import { ChangeEvent, UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Empty, Input, Progress, Spin, Tag, message as toast } from "antd";
+import { Alert, Badge, Button, Empty, Input, Progress, Spin, Tag, message as toast } from "antd";
 import { ChevronDown, ChevronLeft, Paperclip, RotateCcw, Send, UserRoundPen, X } from "lucide-react";
 import { getBootstrap } from "@/api/service";
 import { listDevices, saveDeviceName, updateDeviceName } from "@/api/device";
@@ -11,7 +11,7 @@ import FileCard from "@/components/FileCard";
 import { useDeviceIdentity } from "@/hooks/useDeviceIdentity";
 import { useLanSocket } from "@/hooks/useLanSocket";
 import { getAccessToken, setCurrentDeviceId } from "@/http";
-import { useServiceStore } from "@/store";
+import { useServiceStore, useUnreadStore } from "@/store";
 import type { Device, Message } from "@/types/domain";
 import { formatTime } from "@/utils/time";
 import { createId } from "@/utils/id";
@@ -48,6 +48,11 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   const messagesRef = useRef<Message[]>([]);
   const clientId = useDeviceIdentity();
   const serviceRunning = useServiceStore((state) => state.running);
+  const unreadByPeer = useUnreadStore((state) => state.unreadByPeer);
+  const configureUnread = useUnreadStore((state) => state.configure);
+  const ingestMessages = useUnreadStore((state) => state.ingestMessages);
+  const setActiveConversation = useUnreadStore((state) => state.setActiveConversation);
+  const syncUnreadPeers = useUnreadStore((state) => state.syncPeers);
   const [currentDevice, setCurrentDevice] = useState<Device>();
   const [devices, setDevices] = useState<Device[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -59,6 +64,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   const [fatalError, setFatalError] = useState("");
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [newMessageCount, setNewMessageCount] = useState(0);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 720px)").matches);
 
   const peers = devices.filter((device) => device.id !== currentDevice?.id);
   const selectedDevice = peers.find((device) => device.id === selectedPeerId) ?? peers[0];
@@ -67,6 +73,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     if (!currentDevice) return;
     const deviceResponse = await listDevices();
     setDevices(deviceResponse.data);
+    await syncUnreadPeers(deviceResponse.data.filter((device) => device.id !== currentDevice.id));
     const peerId = selectedDevice?.id ?? selectedPeerId;
     if (peerId) {
       const nextMessages = (await listMessages(peerId)).data;
@@ -92,10 +99,12 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
       listDevices().then(({ data }) => {
         const host = data.find((device) => device.id === "host");
         if (!host) throw new Error("未找到本机主机");
+        configureUnread(host.id);
         setCurrentDevice(host);
         setCurrentDeviceId("host");
         setNickname(host.name);
         setDevices(data);
+        void syncUnreadPeers(data.filter((device) => device.id !== host.id));
         const firstPeer = data.find((device) => device.id !== "host");
         if (firstPeer) setSelectedPeerId(firstPeer.id);
       }).catch((error) => setFatalError(String(error))).finally(() => setLoading(false));
@@ -103,11 +112,13 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     }
     saveDeviceName(nickname);
     getBootstrap().then(({ data }) => {
+      configureUnread(data.currentDevice.id);
       setCurrentDevice(data.currentDevice);
       setCurrentDeviceId(data.currentDevice.id);
-      return listDevices();
-    }).then(({ data }) => {
+      return listDevices().then((devices) => ({ devices, currentDeviceId: data.currentDevice.id }));
+    }).then(({ devices: { data }, currentDeviceId }) => {
       setDevices(data);
+      void syncUnreadPeers(data.filter((device) => device.id !== currentDeviceId));
       setLoading(false);
     }).catch((error) => {
       setFatalError(error.response?.data?.message ?? (getAccessToken() ? "无法连接同网互通主机" : "访问地址缺少令牌，请重新扫描二维码，或让主机开启无令牌访问。"));
@@ -116,14 +127,28 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   }, [clientId, hostMode, serviceRunning]);
 
   useEffect(() => {
+    const media = window.matchMedia("(max-width: 720px)");
+    const update = () => setIsMobile(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  const conversationVisible = Boolean(selectedDevice) && (hostMode || !isMobile || mobileView === "chat");
+  useEffect(() => {
+    setActiveConversation(selectedDevice?.id ?? "", conversationVisible);
+    return () => setActiveConversation("", false);
+  }, [conversationVisible, selectedDevice?.id, setActiveConversation]);
+
+  useEffect(() => {
     if (!currentDevice || !selectedDevice) return;
     shouldStickToBottomRef.current = true;
     setNewMessageCount(0);
     listMessages(selectedDevice.id).then(({ data }) => {
+      ingestMessages(selectedDevice.id, data);
       messagesRef.current = data;
       setMessages(data);
     }).catch(() => undefined);
-  }, [currentDevice, selectedDevice?.id]);
+  }, [currentDevice, ingestMessages, selectedDevice?.id]);
 
   useLayoutEffect(() => {
     const container = messageListRef.current;
@@ -273,7 +298,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
         <div className={styles.deviceList}>
           {peers.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无其他访问端" />}
           {peers.map((device) => <button type="button" key={device.id} className={`${styles.deviceButton} ${device.id === selectedDevice?.id ? styles.activeDevice : ""}`} onClick={() => { setSelectedPeerId(device.id); setMobileView("chat"); }}>
-            <DeviceAvatar device={device} size="small" /><span><strong>{device.name}</strong><small>{device.kind === "host" ? "本机主机" : device.browserSource} · {device.status === "online" ? "在线" : "离线"}</small></span>
+            <Badge count={unreadByPeer[device.id] ?? 0} overflowCount={99} size="small"><DeviceAvatar device={device} size="small" /></Badge><span><strong>{device.name}</strong><small>{device.kind === "host" ? "本机主机" : device.browserSource} · {device.status === "online" ? "在线" : "离线"}</small></span>
             <Tag color={device.status === "online" ? "green" : "default"}>{device.status === "online" ? "可连接" : "离线"}</Tag>
           </button>)}
         </div>

@@ -886,6 +886,7 @@ mod tests {
             save_dir: save,
             rotate_token: true,
             allow_tokenless_access: false,
+            auto_start_service: true,
             cleanup_temp: true,
         };
         let db_path = root.path().join("test.sqlite3");
@@ -1121,6 +1122,7 @@ mod tests {
             save_dir: root.path().join("files"),
             rotate_token: true,
             allow_tokenless_access: false,
+            auto_start_service: true,
             cleanup_temp: true,
         };
         let core = make_core(

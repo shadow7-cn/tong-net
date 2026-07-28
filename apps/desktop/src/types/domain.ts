@@ -68,5 +68,6 @@ export type AppSettings = {
   saveDir: string;
   rotateToken: boolean;
   allowTokenlessAccess: boolean;
+  autoStartService: boolean;
   cleanupTemp: boolean;
 };

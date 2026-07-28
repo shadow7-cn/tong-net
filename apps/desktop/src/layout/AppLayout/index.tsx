@@ -1,16 +1,12 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Button, Layout, Menu, Tag, message } from "antd";
+import { Badge, Button, Layout, Menu, Tag, message } from "antd";
 import { History, MessageCircle, MonitorCog, RadioTower, Settings } from "lucide-react";
-import { useServiceStore } from "@/store";
+import { listDevices } from "@/api/device";
+import { useLanSocket } from "@/hooks/useLanSocket";
+import { setCurrentDeviceId } from "@/http";
+import { useDeviceStore, useServiceStore, useUnreadStore } from "@/store";
 import styles from "./index.module.less";
-
-const menuItems = [
-  { key: "/desktop", icon: <MonitorCog size={17} />, label: "App 端" },
-  { key: "/chat", icon: <MessageCircle size={17} />, label: "访问端会话" },
-  { key: "/records", icon: <History size={17} />, label: "记录" },
-  { key: "/settings", icon: <Settings size={17} />, label: "设置" },
-];
 
 export default function AppLayout() {
   const navigate = useNavigate();
@@ -21,8 +17,43 @@ export default function AppLayout() {
   const initialize = useServiceStore((state) => state.initialize);
   const startService = useServiceStore((state) => state.startService);
   const stopService = useServiceStore((state) => state.stopService);
+  const setDevices = useDeviceStore((state) => state.setDevices);
+  const unreadByPeer = useUnreadStore((state) => state.unreadByPeer);
+  const configureUnread = useUnreadStore((state) => state.configure);
+  const syncUnreadPeers = useUnreadStore((state) => state.syncPeers);
+  const setActiveConversation = useUnreadStore((state) => state.setActiveConversation);
+  const totalUnread = Object.values(unreadByPeer).reduce((sum, count) => sum + count, 0);
+
+  const refreshUnread = useCallback(async () => {
+    if (!running) return;
+    const { data } = await listDevices();
+    setDevices(data);
+    await syncUnreadPeers(data.filter((device) => device.id !== "host"));
+  }, [running, setDevices, syncUnreadPeers]);
 
   useEffect(() => { initialize().catch((error) => api.error(String(error))); }, [initialize]);
+  useEffect(() => {
+    if (!running) return;
+    setCurrentDeviceId("host");
+    configureUnread("host");
+    void refreshUnread();
+  }, [configureUnread, refreshUnread, running]);
+  useEffect(() => {
+    if (location.pathname !== "/chat") setActiveConversation("", false);
+  }, [location.pathname, setActiveConversation]);
+
+  useLanSocket(running, "host", () => { void refreshUnread(); });
+
+  const menuItems = [
+    { key: "/desktop", icon: <MonitorCog size={17} />, label: "App 端" },
+    {
+      key: "/chat",
+      icon: <MessageCircle size={17} />,
+      label: <span className={styles.menuLabel}>访问端会话<Badge count={totalUnread} overflowCount={99} size="small" /></span>,
+    },
+    { key: "/records", icon: <History size={17} />, label: "记录" },
+    { key: "/settings", icon: <Settings size={17} />, label: "设置" },
+  ];
 
   const toggle = async () => {
     try { if (running) await stopService(); else await startService(); }

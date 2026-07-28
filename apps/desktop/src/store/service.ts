@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { getServiceStatus, startLanService, stopLanService } from "@/api/service";
+import { getServiceStatus, getSettings, startLanService, stopLanService } from "@/api/service";
 import { configureDesktopService } from "@/http";
 import type { ServiceInfo } from "@/types/domain";
 
@@ -21,8 +21,12 @@ export const useServiceStore = create<ServiceState>((set) => ({
   ...empty,
   loading: false,
   initialize: async () => {
-    const info = await getServiceStatus();
+    const [info, settings] = await Promise.all([getServiceStatus(), getSettings()]);
     set(applyInfo(info));
+    if (!info.running && settings.autoStartService) {
+      set({ loading: true });
+      try { set(applyInfo(await startLanService())); } catch (error) { set({ loading: false }); throw error; }
+    }
   },
   startService: async () => {
     set({ loading: true });

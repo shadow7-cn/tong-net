@@ -10,6 +10,8 @@ pub struct AppSettings {
     pub rotate_token: bool,
     #[serde(default = "default_allow_tokenless_access")]
     pub allow_tokenless_access: bool,
+    #[serde(default = "default_auto_start_service")]
+    pub auto_start_service: bool,
     pub cleanup_temp: bool,
 }
 
@@ -24,12 +26,17 @@ impl Default for AppSettings {
             save_dir,
             rotate_token: true,
             allow_tokenless_access: true,
+            auto_start_service: true,
             cleanup_temp: true,
         }
     }
 }
 
 fn default_allow_tokenless_access() -> bool {
+    true
+}
+
+fn default_auto_start_service() -> bool {
     true
 }
 
@@ -72,5 +79,6 @@ mod tests {
         .unwrap();
 
         assert!(settings.allow_tokenless_access);
+        assert!(settings.auto_start_service);
     }
 }
