@@ -68,7 +68,7 @@ export default function Records() {
 
   return <div className={styles.page}>
     {contextHolder}
-    <header className={styles.header}><div><h1>本地记录</h1><p>访问端、聊天、文件和传输记录保存在本机 SQLite。</p></div><Button icon={<RefreshCw size={16} />} disabled={!running} loading={loading} onClick={load}>刷新</Button></header>
+    <header className={styles.header}><div><h1>互通记录</h1><p>访问端、聊天、文件和传输记录统一保存在本机 SQLite。</p></div><Button icon={<RefreshCw size={16} />} disabled={!running} loading={loading} onClick={load}>刷新</Button></header>
     {!running && <Alert type="info" showIcon message="开启互通服务后可查看本地记录。" />}
     <Tabs className={styles.tabs} items={[
       { key: "devices", label: `访问端 (${data.devices.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={deviceColumns} dataSource={data.devices} loading={loading} /></div> },

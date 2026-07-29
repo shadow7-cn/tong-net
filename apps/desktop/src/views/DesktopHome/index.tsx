@@ -77,7 +77,7 @@ export default function DesktopHome() {
       {contextHolder}
       <header className={styles.header}>
         <div>
-          <h1>App 端控制台</h1>
+          <h1>互通服务</h1>
           <p>开启服务后，同一局域网内的访问端可以扫码或复制地址进入 Web 端。</p>
         </div>
         <Space>
@@ -95,7 +95,7 @@ export default function DesktopHome() {
 
       <Alert
         className={styles.securityNotice}
-        type={tokenRequired ? "warning" : "error"}
+        type="warning"
         showIcon
         message={tokenRequired
           ? "仅在可信局域网中开启。访问地址包含临时令牌，请不要转发给不信任的人。"

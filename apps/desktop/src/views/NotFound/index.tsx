@@ -9,8 +9,7 @@ export default function NotFound() {
       status="404"
       title="页面不存在"
       subTitle="这个入口还没有被定义。"
-      extra={<Button onClick={() => navigate("/desktop")}>回到 App 端</Button>}
+      extra={<Button onClick={() => navigate("/desktop")}>回到互通服务</Button>}
     />
   );
 }
-

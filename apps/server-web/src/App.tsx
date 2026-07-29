@@ -384,9 +384,19 @@ function NetworksPage() {
   const { info } = useAuth();
   const { message, modal } = AntApp.useApp();
   const [items, setItems] = useState<Network[]>([]);
+  const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
-  const load = useCallback(() => api.networks().then(setItems).catch((error) => message.error(error.message)), [message]);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setItems(await api.networks());
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [message]);
   useEffect(() => { void load(); }, [load]);
   const columns: ColumnsType<Network> = [
     { title: "网络名称", dataIndex: "name" },
@@ -427,9 +437,22 @@ function NetworksPage() {
   };
   return (
     <div className="page">
-      <PageHeader title="私有网络" description="每个网络拥有独立密码、凭据和撤销边界。" action={<Button type="primary" icon={<Plus size={16} />} disabled={info.mode !== "private" || items.length >= 10} onClick={() => { form.resetFields(); form.setFieldValue("password", randomPassword()); setOpen(true); }}>新建网络</Button>} />
+      <PageHeader
+        title="私有网络"
+        description="每个网络拥有独立密码、凭据和撤销边界。"
+        action={(
+          <Space>
+            <Button icon={<RefreshCw size={16} />} loading={loading} onClick={() => void load()}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<Plus size={16} />} disabled={info.mode !== "private" || items.length >= 10} onClick={() => { form.resetFields(); form.setFieldValue("password", randomPassword()); setOpen(true); }}>
+              新建网络
+            </Button>
+          </Space>
+        )}
+      />
       {info.mode === "public" && <Alert type="info" showIcon message="当前为公共节点模式" description="私有网络数据仍保留，但不会运行管理实例。" />}
-      <Card className="table-card"><Table rowKey="id" columns={columns} dataSource={items} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: <Empty description="暂无私有网络" /> }} /></Card>
+      <Card className="table-card"><Table rowKey="id" columns={columns} dataSource={items} loading={loading} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: <Empty description="暂无私有网络" /> }} /></Card>
       <Modal title="新建私有网络" open={open} onCancel={() => setOpen(false)} okText="创建" onOk={() => form.submit()}>
         <Form form={form} layout="vertical" requiredMark={false} onFinish={async (values) => { try { await api.createNetwork(values); message.success("网络创建成功"); setOpen(false); await load(); } catch (error) { message.error((error as Error).message); } }}>
           <Form.Item name="name" label="网络名称" rules={[{ required: true }, { max: 64 }]}><Input /></Form.Item>

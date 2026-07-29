@@ -45,14 +45,21 @@ export default function AppLayout() {
   useLanSocket(running, "host", () => { void refreshUnread(); });
 
   const menuItems = [
-    { key: "/desktop", icon: <MonitorCog size={17} />, label: "App 端" },
     {
-      key: "/chat",
-      icon: <MessageCircle size={17} />,
-      label: <span className={styles.menuLabel}>访问端会话<Badge count={totalUnread} overflowCount={99} size="small" /></span>,
+      key: "lan-interconnect",
+      icon: <RadioTower size={17} />,
+      label: "局域网互通",
+      children: [
+        { key: "/desktop", icon: <MonitorCog size={17} />, label: "互通服务" },
+        {
+          key: "/chat",
+          icon: <MessageCircle size={17} />,
+          label: <span className={styles.menuLabel}>访问端会话<Badge count={totalUnread} overflowCount={99} size="small" /></span>,
+        },
+        { key: "/records", icon: <History size={17} />, label: "互通记录" },
+      ],
     },
     { key: "/virtual-lan", icon: <Network size={17} />, label: "虚拟局域网" },
-    { key: "/records", icon: <History size={17} />, label: "记录" },
     { key: "/settings", icon: <Settings size={17} />, label: "设置" },
   ];
 
@@ -75,6 +82,7 @@ export default function AppLayout() {
         <Menu
           mode="inline"
           selectedKeys={[location.pathname]}
+          defaultOpenKeys={["lan-interconnect"]}
           items={menuItems}
           onClick={(item) => navigate(item.key)}
           className={styles.menu}
@@ -82,7 +90,7 @@ export default function AppLayout() {
         <div className={styles.serviceBox}>
           <div className={styles.serviceLine}>
             <RadioTower size={16} />
-            <span>局域网中转站</span>
+            <span>互通服务</span>
             <Tag color={running ? "green" : "default"}>{running ? "运行中" : "未开启"}</Tag>
           </div>
           <Button type={running ? "default" : "primary"} block loading={loading} onClick={toggle}>
