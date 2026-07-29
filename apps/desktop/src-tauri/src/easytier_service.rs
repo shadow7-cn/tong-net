@@ -11,15 +11,17 @@ use std::time::Duration;
 
 const SERVICE_ADDRESS: &str = "127.0.0.1:17283";
 const SERVICE_LABEL: &str = "com.tingxi.tongnet.easytier";
-const SERVICE_PROTOCOL_VERSION: u32 = 1;
+const SERVICE_PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceNetworkConfig {
     pub network_name: String,
-    pub network_secret: String,
+    pub auth_type: String,
+    pub auth_secret: String,
     pub device_name: String,
     pub server_address: String,
+    pub peer_public_key: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -84,32 +86,64 @@ impl ServiceHost {
             return Err("EasyTier Core 已经在运行".into());
         }
         self.stop_residual_core();
-        let address = config
-            .server_address
-            .trim()
-            .parse::<std::net::SocketAddr>()
-            .map_err(|_| "EasyTier 服务收到无效连接地址".to_string())?;
+        let address = validate_peer_address(&config.server_address)?;
         std::fs::create_dir_all(&self.runtime_dir).map_err(|error| error.to_string())?;
         let log_path = self.runtime_dir.join("core.log");
         let stdout = std::fs::File::create(&log_path).map_err(|error| error.to_string())?;
         let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
-        let child = Command::new(&self.core_path)
-            .args([
-                "--network-name",
-                config.network_name.trim(),
-                "--dhcp",
-                "true",
-                "--hostname",
-                config.device_name.trim(),
-                "--no-listener",
-                "--rpc-portal",
-                "127.0.0.1:17282",
-                "--peers",
-                &format!("tcp://{address}"),
-                "--peers",
-                &format!("udp://{address}"),
-            ])
-            .env("ET_NETWORK_SECRET", config.network_secret)
+        let mut arguments = vec![
+            "--network-name".to_string(),
+            config.network_name.trim().to_string(),
+            "--dhcp".to_string(),
+            "true".to_string(),
+            "--hostname".to_string(),
+            config.device_name.trim().to_string(),
+            "--no-listener".to_string(),
+            "--rpc-portal".to_string(),
+            "127.0.0.1:17282".to_string(),
+            "--secure-mode".to_string(),
+            "true".to_string(),
+        ];
+        let peer_public_key = config.peer_public_key.trim();
+        if peer_public_key.is_empty() {
+            arguments.extend([
+                "--peers".to_string(),
+                format!("tcp://{address}"),
+                "--peers".to_string(),
+                format!("udp://{address}"),
+            ]);
+        } else {
+            if peer_public_key.chars().any(char::is_control) {
+                return Err("EasyTier 服务端身份公钥无效".into());
+            }
+            let peer_config_path = self.runtime_dir.join("peer.toml");
+            let peer_config = format!(
+                "[[peer]]\nuri = {}\npeer_public_key = {}\n\n[[peer]]\nuri = {}\npeer_public_key = {}\n",
+                serde_json::to_string(&format!("tcp://{address}"))
+                    .map_err(|error| error.to_string())?,
+                serde_json::to_string(peer_public_key)
+                    .map_err(|error| error.to_string())?,
+                serde_json::to_string(&format!("udp://{address}"))
+                    .map_err(|error| error.to_string())?,
+                serde_json::to_string(peer_public_key)
+                    .map_err(|error| error.to_string())?,
+            );
+            std::fs::write(&peer_config_path, peer_config).map_err(|error| error.to_string())?;
+            arguments.extend([
+                "--config-file".to_string(),
+                peer_config_path.to_string_lossy().to_string(),
+            ]);
+        }
+        if config.auth_type == "credential" {
+            arguments.push("--credential".into());
+            arguments.push(config.auth_secret.clone());
+        }
+        let mut command = Command::new(&self.core_path);
+        command.args(arguments);
+        if config.auth_type == "network_secret" {
+            command.env("ET_NETWORK_SECRET", &config.auth_secret);
+        }
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
@@ -189,6 +223,20 @@ impl ServiceHost {
             },
         }
     }
+}
+
+fn validate_peer_address(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.contains("://") || value.chars().any(char::is_whitespace) {
+        return Err("EasyTier 服务收到无效连接地址".into());
+    }
+    let (host, port) = value
+        .rsplit_once(':')
+        .ok_or_else(|| "EasyTier 服务收到无效连接地址".to_string())?;
+    if host.is_empty() || port.parse::<u16>().is_err() {
+        return Err("EasyTier 服务收到无效连接地址".into());
+    }
+    Ok(value.to_string())
 }
 
 impl Drop for ServiceHost {
@@ -670,9 +718,11 @@ mod tests {
         host.start_core(
             ServiceNetworkConfig {
                 network_name: "test".into(),
-                network_secret: "secret".into(),
+                auth_type: "network_secret".into(),
+                auth_secret: "secret".into(),
                 device_name: "desktop".into(),
                 server_address: "203.0.113.10:11010".into(),
+                peer_public_key: "test-public-key".into(),
             },
             std::process::id(),
         )

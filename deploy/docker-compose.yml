@@ -1,0 +1,30 @@
+services:
+  tong-net-server:
+    build:
+      context: ..
+      dockerfile: docker/server.Dockerfile
+    image: tong-net-server:0.2.0
+    container_name: tong-net-server
+    restart: unless-stopped
+    ports:
+      - "${TONGNET_WEB_PORT:-17280}:${TONGNET_WEB_PORT:-17280}/tcp"
+      - "${TONGNET_EASYTIER_PORT:-11010}:${TONGNET_EASYTIER_PORT:-11010}/tcp"
+      - "${TONGNET_EASYTIER_PORT:-11010}:${TONGNET_EASYTIER_PORT:-11010}/udp"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TONGNET_WEB_PORT: "${TONGNET_WEB_PORT:-17280}"
+      TONGNET_EASYTIER_PORT: "${TONGNET_EASYTIER_PORT:-11010}"
+      TONGNET_INTERNAL_EASYTIER_HOST: "tong-net-server"
+      TZ: "${TZ:-Asia/Shanghai}"
+      RUST_LOG: "${RUST_LOG:-info}"
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

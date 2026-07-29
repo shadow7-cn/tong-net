@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export interface EasyTierConfig {
+  serverUrl: string;
   networkName: string;
-  networkSecret: string;
+  networkPassword: string;
   deviceName: string;
-  serverAddress: string;
+  allowInsecureHttp: boolean;
 }
 
 export interface EasyTierMember {
@@ -29,6 +30,9 @@ export interface EasyTierStatus {
   networkName: string;
   deviceName: string;
   virtualIp: string;
+  serverMode: "" | "public" | "private";
+  serverUrl: string;
+  insecureHttp: boolean;
   members: EasyTierMember[];
   logs: string[];
 }

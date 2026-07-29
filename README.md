@@ -6,7 +6,7 @@
 
 同网互通是一款免费、开源的设备聊天与文件传输工具。在同一局域网内，一台 Windows 或 macOS 电脑开启服务后，手机、平板和其他电脑无需安装客户端，直接使用浏览器即可加入。
 
-需要跨网络连接时，可以使用应用内置的 EasyTier Core 接入自建虚拟局域网。所有消息、文件和记录仍保存在自己的主机电脑中：局域网模式不需要账号、云服务或公网服务器；虚拟局域网模式需要自行准备 EasyTier 网络或服务器。
+需要跨网络连接时，可以使用应用内置的 EasyTier Core 接入自建的“同网互通组网服务”。所有消息、文件和记录仍保存在自己的主机电脑中：局域网模式不需要账号、云服务或公网服务器；虚拟局域网模式需要在一台 Linux 服务器上部署组网服务。
 
 ## 使用者指南
 
@@ -65,10 +65,17 @@ sudo xattr -cr "/Applications/同网互通.app"
 #### 通过虚拟局域网连接
 
 1. 在左侧进入“虚拟局域网”。
-2. 填写 EasyTier 网络名称、网络密码、自己的设备名称和服务器地址。
+2. 填写组网服务端完整地址、网络名称、网络密码和自己的设备名称。
 3. 点击“连接虚拟局域网”。
 4. 连接成功后，回到 App 端首页，切换到虚拟局域网地址或二维码。
 5. 其他已经加入同一 EasyTier 网络的设备，可以通过该地址访问同网互通。
+
+服务端地址示例为 `https://vpn.example.com` 或 `http://服务器IP:17280`。使用 HTTP 时，桌面端会在首次连接前提示风险，并持续显示“未加密”标签。
+
+组网服务支持两种模式：
+
+- **私有节点**：管理员在服务端创建网络。用户填写可见的网络名称和密码，服务端为每台设备签发独立凭据，支持按网络撤销设备。
+- **公共节点**：用户自行填写网络名称和密码，服务端只提供共享节点，不保存这些网络信息。
 
 #### 首次启用虚拟局域网
 
@@ -93,10 +100,85 @@ sudo xattr -cr "/Applications/同网互通.app"
 ### 当前限制
 
 - 上传不支持断点续传；下载支持断点续传。
-- 不支持群聊和广播；跨网络互通需要自行准备 EasyTier 网络或服务器。
+- 不支持群聊和广播；跨网络互通需要自行部署同网互通组网服务。
 - 不提供用户账号、云同步和远程备份。
 - 同一设备使用不同浏览器或微信内置浏览器访问时，会被识别为不同访问端。
 - 浏览器和操作系统可能限制后台传输与下载行为。
+
+---
+
+## 自建组网服务
+
+这一部分面向拥有 Linux 服务器、希望跨网络使用同网互通的用户。当前版本需要从项目代码构建 Docker 镜像，镜像市场安装将在后续版本提供。
+
+### 准备条件
+
+- 一台可以运行 Docker 和 Docker Compose 的 Linux 服务器。
+- 放通 `17280/TCP`，用于管理页面和桌面端认证。
+- 放通 `11010/TCP` 和 `11010/UDP`，用于 EasyTier 组网。
+- 服务器存在 `/dev/net/tun`。
+
+两个端口都是默认值，可以在 `deploy/.env` 中修改。
+
+### 部署
+
+```bash
+git clone https://github.com/shadow7-cn/tong-net.git
+cd tong-net
+cp deploy/.env.example deploy/.env
+docker compose -f deploy/docker-compose.yml build
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+构建完成后，在浏览器打开：
+
+```text
+http://服务器IP:17280
+```
+
+首次进入会要求创建管理员用户名和密码、填写站点名称和对外 IP 或域名，并选择公共或私有节点模式。私有模式还需要创建第一个网络。
+
+常用管理命令：
+
+```bash
+# 查看运行状态
+docker compose -f deploy/docker-compose.yml ps
+
+# 查看日志
+docker compose -f deploy/docker-compose.yml logs -f
+
+# 停止服务
+docker compose -f deploy/docker-compose.yml down
+
+# 更新代码后重新构建
+git pull
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+### 忘记管理员密码
+
+在服务器上执行下面的命令，然后根据提示输入两次新密码：
+
+```bash
+docker exec -it tong-net-server tong-net-server admin reset-password
+```
+
+重置后，已经登录的管理页面会全部退出，需要使用新密码重新登录。
+
+### 数据备份
+
+数据库、密钥、网络配置和设备凭据都保存在 `deploy/data`。备份前建议先停止容器：
+
+```bash
+docker compose -f deploy/docker-compose.yml down
+tar -czf tong-net-server-backup.tar.gz deploy/data
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+恢复时，应把完整的 `deploy/data` 一起恢复，不能只复制 SQLite 数据库，否则已加密的网络配置将无法解密。
+
+> [!IMPORTANT]
+> 直接通过公网使用 `http://` 会明文传输登录信息。正式使用建议配置域名，并通过 Caddy、Nginx 或 1Panel 反向代理提供 HTTPS。组网端口 `11010/TCP+UDP` 仍需直接转发到容器。
 
 ---
 
@@ -149,7 +231,12 @@ EasyTier Core
 - EasyTier Core
 - macOS LaunchDaemon、Windows Service
 
-项目采用 npm workspaces 组织，目前桌面应用位于 `apps/desktop`。
+项目采用 npm workspaces 组织：
+
+- `apps/desktop`：Tauri 桌面端及浏览器访问端。
+- `apps/server`：Linux 组网服务 Rust 后端。
+- `apps/server-web`：Linux 管理 Web。
+- `docker`、`deploy`：服务端镜像和 Compose 配置。
 
 ### 本地开发
 
@@ -179,12 +266,14 @@ npm run tauri -- dev
 ```bash
 npm test -w desktop
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/server/Cargo.toml
 ```
 
 #### 构建前端
 
 ```bash
 npm run build
+npm run build:server-web
 ```
 
 #### 打包桌面应用
@@ -213,7 +302,7 @@ npm run tauri -- build
 - `apps/desktop/src-tauri/Cargo.toml`
 - 根目录和桌面 workspace 的 `package.json`
 
-修改版本号后，执行一次 `npm install --package-lock-only`，让 `package-lock.json` 同步更新。以发布 `0.1.2` 为例：
+桌面端和组网服务端统一使用同一个版本号。修改版本号后，执行一次 `npm install --package-lock-only`，让 `package-lock.json` 同步更新。以发布 `0.2.0` 为例：
 
 ```bash
 npm install --package-lock-only
@@ -225,11 +314,11 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 git add README.md package.json package-lock.json apps/desktop/package.json \
   apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
   apps/desktop/src-tauri/tauri.conf.json
-git commit -m "chore: release v0.1.2"
+git commit -m "chore: release v0.2.0"
 git push origin main
 
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 标签中的版本必须与 `tauri.conf.json` 完全一致，否则工作流会主动失败。构建开始后，可以在仓库的 **Actions** 页面查看进度；完成后，产物会进入 GitHub **Releases** 的草稿版本。请先下载测试 Windows 和 macOS 安装包，确认可以启动服务和连接虚拟局域网，再点击 **Publish release**。
@@ -240,6 +329,8 @@ Windows 便携版仍依赖 Microsoft Edge WebView2 Runtime，Windows 10/11 通�
 
 - [产品需求文档](docs/prd.md)
 - [技术设计文档](docs/trd.md)
+- [组网服务产品需求文档](docs/prd-virtual-lan.md)
+- [组网服务技术设计文档](docs/trd-docker-server.md)
 
 ### 参与贡献
 
@@ -251,6 +342,8 @@ Windows 便携版仍依赖 Microsoft Edge WebView2 Runtime，Windows 10/11 通�
 npm test -w desktop
 npm run build
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/server/Cargo.toml
+npm run build:server-web
 ```
 
 请保持改动范围清晰，并为重要行为补充测试。安全问题请避免在公开 Issue 中披露可直接利用的细节。

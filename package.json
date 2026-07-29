@@ -1,7 +1,7 @@
 {
   "name": "tong-net",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "license": "MIT",
   "workspaces": [
     "apps/*"
@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "npm run dev -w desktop",
     "build": "npm run build -w desktop",
+    "build:server-web": "npm run build -w server-web",
+    "test:server": "cargo test --manifest-path apps/server/Cargo.toml",
+    "docker:build": "docker compose -f deploy/docker-compose.yml build",
     "preview": "npm run preview -w desktop",
     "tauri": "npm run tauri -w desktop",
     "prepare:easytier": "node scripts/prepare-easytier-core.mjs"

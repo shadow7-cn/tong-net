@@ -21,6 +21,9 @@ const empty: EasyTierStatus = {
   networkName: "",
   deviceName: "",
   virtualIp: "",
+  serverMode: "",
+  serverUrl: "",
+  insecureHttp: false,
   members: [],
   logs: [],
 };

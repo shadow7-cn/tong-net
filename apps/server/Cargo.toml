@@ -1,0 +1,32 @@
+[package]
+name = "tong-net-server"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/shadow7-cn/tong-net"
+
+[dependencies]
+aes-gcm = "0.10"
+argon2 = "0.5"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+mime_guess = "2"
+rand = "0.8"
+rpassword = "7"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

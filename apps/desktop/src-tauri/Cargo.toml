@@ -1,6 +1,6 @@
 [package]
 name = "tong-net-desktop"
-version = "0.1.2"
+version = "0.2.0"
 description = "同网互通桌面端"
 authors = ["tingxi"]
 license = "MIT"
@@ -43,6 +43,7 @@ urlencoding = "2"
 rust-embed = "8"
 aes-gcm = "0.10"
 base64 = "0.22"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
