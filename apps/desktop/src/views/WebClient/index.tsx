@@ -1,11 +1,10 @@
 import { ChangeEvent, UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Empty, Input, Progress, Spin, Tag, message as toast } from "antd";
-import { ChevronDown, ChevronLeft, Paperclip, RotateCcw, Send, UserRoundPen, X } from "lucide-react";
+import { Alert, Button, Drawer, Empty, Input, Popconfirm, Progress, Segmented, Spin, Tag, Tooltip, message as toast } from "antd";
+import { ChevronDown, Paperclip, RotateCcw, Save, Send, Trash2, Users, X } from "lucide-react";
 import { getBootstrap } from "@/api/service";
-import { listDevices, saveDeviceName, updateDeviceName } from "@/api/device";
-import { listMessages } from "@/api/conversation";
-import { sendTextMessage } from "@/api/message";
-import { cancelTransfer, uploadConversationFile } from "@/api/file";
+import { listDevices, removeDevice, saveDeviceName, updateDeviceName } from "@/api/device";
+import { listMessages, sendTextMessage } from "@/api/message";
+import { cancelTransfer, uploadGroupFile } from "@/api/file";
 import DeviceAvatar from "@/components/DeviceAvatar";
 import FileCard from "@/components/FileCard";
 import { useDeviceIdentity } from "@/hooks/useDeviceIdentity";
@@ -16,8 +15,10 @@ import type { Device, Message } from "@/types/domain";
 import { formatTime } from "@/utils/time";
 import { createId } from "@/utils/id";
 import { isNearScrollBottom } from "@/utils/scroll";
+import { mergeMessages } from "@/utils/groupChat";
 import { estimateRemainingSeconds, formatRemainingTime, formatTransferSpeed } from "@/utils/transfer";
 import styles from "./index.module.less";
+import GroupAccess from "./components/GroupAccess";
 
 type UploadItem = {
   id: string;
@@ -46,157 +47,166 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   const uploadControllersRef = useRef(new Map<string, AbortController>());
   const uploadSamplesRef = useRef(new Map<string, { time: number; bytes: number; speed: number }>());
   const messagesRef = useRef<Message[]>([]);
+  const latestCursor = useRef<string | undefined>(undefined);
+  const refreshPending = useRef(false);
+  const refreshRequested = useRef(false);
+  const historyPending = useRef(false);
+  const scrollAnchor = useRef<{ height: number; top: number } | undefined>(undefined);
   const clientId = useDeviceIdentity();
   const serviceRunning = useServiceStore((state) => state.running);
-  const unreadByPeer = useUnreadStore((state) => state.unreadByPeer);
   const configureUnread = useUnreadStore((state) => state.configure);
-  const ingestMessages = useUnreadStore((state) => state.ingestMessages);
-  const setActiveConversation = useUnreadStore((state) => state.setActiveConversation);
-  const syncUnreadPeers = useUnreadStore((state) => state.syncPeers);
+  const syncUnread = useUnreadStore((state) => state.sync);
+  const setVisible = useUnreadStore((state) => state.setVisible);
   const [currentDevice, setCurrentDevice] = useState<Device>();
   const [devices, setDevices] = useState<Device[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [nickname, setNickname] = useState(() => localStorage.getItem("tong-net-device-name") ?? defaultNickname());
-  const [selectedPeerId, setSelectedPeerId] = useState("host");
-  const [mobileView, setMobileView] = useState<"list" | "chat">("list");
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [memberFilter, setMemberFilter] = useState<"online" | "all">("online");
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState("");
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [newMessageCount, setNewMessageCount] = useState(0);
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 720px)").matches);
+  const [hasHistory, setHasHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [sending, setSending] = useState(false);
 
-  const peers = devices.filter((device) => device.id !== currentDevice?.id);
-  const selectedDevice = peers.find((device) => device.id === selectedPeerId) ?? peers[0];
+  const acceptMessages = useCallback((incoming: Message[], prepend = false) => {
+    const next = mergeMessages(messagesRef.current, incoming, prepend);
+    messagesRef.current = next;
+    setMessages(next);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!currentDevice) return;
-    const deviceResponse = await listDevices();
-    setDevices(deviceResponse.data);
-    await syncUnreadPeers(deviceResponse.data.filter((device) => device.id !== currentDevice.id));
-    const peerId = selectedDevice?.id ?? selectedPeerId;
-    if (peerId) {
-      const nextMessages = (await listMessages(peerId)).data;
-      const knownIds = new Set(messagesRef.current.map((item) => item.id));
-      const incomingCount = nextMessages.filter((item) => !knownIds.has(item.id) && item.fromDeviceId !== currentDevice.id).length;
-      if (incomingCount > 0 && !shouldStickToBottomRef.current) {
-        setNewMessageCount((count) => count + incomingCount);
+    refreshRequested.current = true;
+    if (refreshPending.current) return;
+    refreshPending.current = true;
+    try {
+      while (refreshRequested.current) {
+        refreshRequested.current = false;
+        setDevices((await listDevices()).data);
+        const cursor = latestCursor.current;
+        const nextMessages = (await listMessages(cursor ? { after: cursor } : undefined)).data;
+        const knownIds = new Set(messagesRef.current.map((item) => item.id));
+        const incomingCount = nextMessages.filter((item) => !knownIds.has(item.id) && item.fromDeviceId !== currentDevice.id && item.type !== "system").length;
+        if (cursor && incomingCount && !shouldStickToBottomRef.current) setNewMessageCount((count) => count + incomingCount);
+        if (!cursor) setHasHistory(nextMessages.length === 50);
+        latestCursor.current = nextMessages[nextMessages.length - 1]?.id ?? cursor ?? "0";
+        acceptMessages(nextMessages);
+        await syncUnread();
+        if (cursor && nextMessages.length === 50) refreshRequested.current = true;
       }
-      messagesRef.current = nextMessages;
-      setMessages(nextMessages);
-    }
-  }, [currentDevice, selectedDevice?.id, selectedPeerId]);
+    } finally { refreshPending.current = false; }
+  }, [currentDevice, acceptMessages, syncUnread]);
 
   useEffect(() => {
-    if (hostMode) {
-      if (!serviceRunning) {
-        setFatalError("请先开启互通服务，再进入访问端会话。");
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      setFatalError("");
-      listDevices().then(({ data }) => {
-        const host = data.find((device) => device.id === "host");
-        if (!host) throw new Error("未找到本机主机");
-        configureUnread(host.id);
-        setCurrentDevice(host);
-        setCurrentDeviceId("host");
-        setNickname(host.name);
-        setDevices(data);
-        void syncUnreadPeers(data.filter((device) => device.id !== host.id));
-        const firstPeer = data.find((device) => device.id !== "host");
-        if (firstPeer) setSelectedPeerId(firstPeer.id);
-      }).catch((error) => setFatalError(String(error))).finally(() => setLoading(false));
-      return;
-    }
-    saveDeviceName(nickname);
-    getBootstrap().then(({ data }) => {
-      configureUnread(data.currentDevice.id);
-      setCurrentDevice(data.currentDevice);
-      setCurrentDeviceId(data.currentDevice.id);
-      return listDevices().then((devices) => ({ devices, currentDeviceId: data.currentDevice.id }));
-    }).then(({ devices: { data }, currentDeviceId }) => {
-      setDevices(data);
-      void syncUnreadPeers(data.filter((device) => device.id !== currentDeviceId));
-      setLoading(false);
-    }).catch((error) => {
-      setFatalError(error.response?.data?.message ?? (getAccessToken() ? "无法连接同网互通主机" : "访问地址缺少令牌，请重新扫描二维码，或让主机开启无令牌访问。"));
-      setLoading(false);
-    });
-  }, [clientId, hostMode, serviceRunning]);
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 720px)");
-    const update = () => setIsMobile(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  const conversationVisible = Boolean(selectedDevice) && (hostMode || !isMobile || mobileView === "chat");
-  useEffect(() => {
-    setActiveConversation(selectedDevice?.id ?? "", conversationVisible);
-    return () => setActiveConversation("", false);
-  }, [conversationVisible, selectedDevice?.id, setActiveConversation]);
-
-  useEffect(() => {
-    if (!currentDevice || !selectedDevice) return;
+    let disposed = false;
+    setLoading(true);
+    setFatalError("");
+    setCurrentDevice(undefined);
+    latestCursor.current = undefined;
+    messagesRef.current = [];
+    setMessages([]);
     shouldStickToBottomRef.current = true;
-    setNewMessageCount(0);
-    listMessages(selectedDevice.id).then(({ data }) => {
-      ingestMessages(selectedDevice.id, data);
-      messagesRef.current = data;
-      setMessages(data);
-    }).catch(() => undefined);
-  }, [currentDevice, ingestMessages, selectedDevice?.id]);
+    const initialize = async () => {
+      if (hostMode && !serviceRunning) throw new Error("请先开启互通服务，再进入互通群聊。");
+      if (!hostMode) saveDeviceName(nickname);
+      const device = hostMode
+        ? (await listDevices()).data.find((item) => item.id === "host")
+        : (await getBootstrap()).data.currentDevice;
+      if (!device) throw new Error("未找到本机主机");
+      if (disposed) return;
+      setCurrentDeviceId(device.id);
+      configureUnread(device.id);
+      setNickname(device.name);
+      setCurrentDevice(device);
+    };
+    void initialize().catch((error) => {
+      if (!disposed) setFatalError(error.response?.data?.message ?? (hostMode ? error.message : getAccessToken() ? "无法连接同网互通主机" : "无法进入，请检查地址和访问令牌。"));
+    }).finally(() => { if (!disposed) setLoading(false); });
+    return () => { disposed = true; };
+  }, [clientId, hostMode, serviceRunning, configureUnread]);
+
+  useEffect(() => {
+    if (!currentDevice) return;
+    void refresh().catch(() => api.error("群聊加载失败，请检查连接"));
+    const update = () => {
+      setVisible(document.visibilityState === "visible" && document.hasFocus());
+      if (document.visibilityState === "visible") void refresh().catch(() => undefined);
+    };
+    update();
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      setVisible(false);
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [currentDevice, refresh, setVisible]);
+
+  const loadHistory = async () => {
+    const container = messageListRef.current;
+    const before = messagesRef.current[0]?.id;
+    if (!container || !before || !hasHistory || historyPending.current) return;
+    historyPending.current = true;
+    setHistoryLoading(true);
+    try {
+      const { data } = await listMessages({ before });
+      scrollAnchor.current = { height: container.scrollHeight, top: container.scrollTop };
+      acceptMessages(data, true);
+      setHasHistory(data.length === 50);
+    } catch { api.error("历史消息加载失败"); }
+    finally { historyPending.current = false; setHistoryLoading(false); }
+  };
 
   useLayoutEffect(() => {
     const container = messageListRef.current;
-    if (container && shouldStickToBottomRef.current) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }, [messages, mobileView, uploads]);
+    if (!container) return;
+    if (scrollAnchor.current) {
+      container.scrollTop = scrollAnchor.current.top + container.scrollHeight - scrollAnchor.current.height;
+      scrollAnchor.current = undefined;
+    } else if (shouldStickToBottomRef.current) container.scrollTop = container.scrollHeight;
+  }, [messages, uploads, loading, historyLoading]);
 
-  const { connected } = useLanSocket(Boolean(currentDevice), currentDevice?.id ?? "", () => { void refresh(); });
-
+  const { connected } = useLanSocket(Boolean(currentDevice), currentDevice?.id ?? "", () => { void refresh().catch(() => undefined); });
   const deviceNameMap = useMemo(() => new Map(devices.map((device) => [device.id, device.name])), [devices]);
+  const onlineCount = devices.filter((device) => device.status === "online").length;
+  const visibleMembers = devices.filter((device) => memberFilter === "all" || device.status === "online");
 
   const trackMessageScroll = (event: UIEvent<HTMLDivElement>) => {
-    const atBottom = isNearScrollBottom(event.currentTarget);
-    shouldStickToBottomRef.current = atBottom;
-    if (atBottom) setNewMessageCount(0);
+    const container = event.currentTarget;
+    shouldStickToBottomRef.current = isNearScrollBottom(container);
+    if (shouldStickToBottomRef.current) setNewMessageCount(0);
+    if (container.scrollTop < 40) void loadHistory();
   };
-
   const scrollToLatest = () => {
     shouldStickToBottomRef.current = true;
     setNewMessageCount(0);
     const container = messageListRef.current;
     if (container) container.scrollTop = container.scrollHeight;
   };
-
   const followOwnMessage = () => {
     shouldStickToBottomRef.current = true;
     setNewMessageCount(0);
   };
-
   const sendMessage = async () => {
     const content = draft.trim();
-    if (!content || !selectedDevice) return;
+    if (!content || !currentDevice || sending) return;
     followOwnMessage();
     setDraft("");
+    setSending(true);
     try {
-      const { data } = await sendTextMessage(selectedDevice.id, content);
-      setMessages((items) => {
-        const next = [...items, data];
-        messagesRef.current = next;
-        return next;
-      });
+      acceptMessages([(await sendTextMessage(content)).data]);
+      void refresh().catch(() => undefined);
     } catch (error: any) {
-      setDraft(content);
+      setDraft((value) => value || content);
       api.error(error.response?.data?.message ?? "消息发送失败");
-    }
+    } finally { setSending(false); }
   };
-
   const changeNickname = async () => {
     const name = nickname.trim();
     if (!name) { api.warning("昵称不能为空"); return; }
@@ -210,8 +220,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   };
 
   const startUpload = (file: File) => {
-    if (!selectedDevice) return;
-    const peerId = selectedDevice.id;
+    if (!currentDevice) return;
     const id = createId();
     const controller = new AbortController();
     uploadControllersRef.current.set(id, controller);
@@ -219,7 +228,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     setUploads((items) => [...items, { id, file, name: file.name, progress: 0, speed: 0, remaining: 0, status: "running" }]);
     const formData = new FormData();
     formData.append("file", file);
-    void uploadConversationFile(peerId, formData, {
+    void uploadGroupFile(formData, {
       transferId: id,
       fileName: file.name,
       fileSize: file.size,
@@ -241,11 +250,8 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
         } : item));
       },
     }).then(({ data }) => {
-      setMessages((items) => {
-        const next = [...items, data];
-        messagesRef.current = next;
-        return next;
-      });
+      acceptMessages([data]);
+      void refresh().catch(() => undefined);
       setUploads((items) => items.filter((item) => item.id !== id));
     }).catch((error: any) => {
       if (controller.signal.aborted) return;
@@ -271,49 +277,39 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!selectedDevice) return;
+    if (!currentDevice) return;
     followOwnMessage();
     files.forEach(startUpload);
   };
 
-  if (loading) return <div className={`${styles.centerState} ${hostMode ? styles.desktopCenterState : ""}`}><Spin size="large" /></div>;
-  if (fatalError) return <div className={`${styles.centerState} ${hostMode ? styles.desktopCenterState : ""}`}><Alert type="error" showIcon message="无法进入" description={fatalError} /></div>;
+
+  const removeMember = async (id: string) => {
+    try { await removeDevice(id); await refresh(); }
+    catch (error: any) { api.error(error.response?.data?.message ?? "移除失败"); }
+  };
+
+  if (loading) return <div className={styles.centerState}><Spin size="large" /></div>;
+  if (fatalError) return <div className={styles.centerState}><Alert type="error" showIcon title="无法进入" description={fatalError} /></div>;
 
   return (
-    <div className={`${styles.page} ${hostMode ? styles.desktopEmbedded : ""} ${mobileView === "chat" ? styles.mobileChat : styles.mobileList}`}>
+    <div className={`${styles.page} ${hostMode ? styles.desktopEmbedded : ""}`}>
       {contextHolder}
-      <section className={styles.sidebar}>
-        <div className={styles.mobileTitle}>
-          <div className={styles.mobileBrand}>
-            <img src="/brand/tong-net-logo.png" alt="同网互通 Logo" />
-            <div><h1>同网互通</h1><p>选择一个访问端开始发送消息或文件。</p></div>
-          </div>
-          <Tag color={connected ? "green" : "orange"}>{connected ? "已连接" : "重连中"}</Tag>
-        </div>
-        {currentDevice && <div className={styles.profile}>
-          <DeviceAvatar device={currentDevice} />
-          <div className={styles.profileBody}><div className={styles.label}>当前访问端</div><Input size="small" value={nickname} maxLength={40} onChange={(event) => setNickname(event.target.value)} onPressEnter={changeNickname} suffix={<UserRoundPen size={14} />} /></div>
-          <Button size="small" onClick={changeNickname}>保存</Button>
-        </div>}
-        <div className={styles.deviceList}>
-          {peers.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无其他访问端" />}
-          {peers.map((device) => <button type="button" key={device.id} className={`${styles.deviceButton} ${device.id === selectedDevice?.id ? styles.activeDevice : ""}`} onClick={() => { setSelectedPeerId(device.id); setMobileView("chat"); }}>
-            <Badge count={unreadByPeer[device.id] ?? 0} overflowCount={99} size="small"><DeviceAvatar device={device} size="small" /></Badge><span><strong>{device.name}</strong><small>{device.kind === "host" ? "本机主机" : device.browserSource} · {device.status === "online" ? "在线" : "离线"}</small></span>
-            <Tag color={device.status === "online" ? "green" : "default"}>{device.status === "online" ? "可连接" : "离线"}</Tag>
-          </button>)}
-        </div>
-      </section>
-
       <section className={styles.chat}>
-        {selectedDevice ? <>
-          <header className={styles.chatHeader}>
-            <Button className={styles.backButton} aria-label="返回访问端列表" type="text" icon={<ChevronLeft size={19} />} onClick={() => setMobileView("list")} />
-            <div className={styles.chatPeer}><DeviceAvatar device={selectedDevice} /><div><h1>{selectedDevice.name}</h1><p>一对一会话，文件通过主机中转保存。</p></div></div>
-            <Tag color={selectedDevice.status === "online" ? "green" : "default"}>{selectedDevice.status === "online" ? "在线" : "离线"}</Tag>
-          </header>
+        <header className={styles.chatHeader}>
+          <div className={styles.brand}>
+            <img src="/brand/tong-net-logo.png" alt="同网互通" />
+            <h1>互通群聊</h1>
+          </div>
+          {hostMode && serviceRunning && <GroupAccess />}
+          <div className={styles.headerActions}>
+            <Tag color={connected ? "green" : "orange"}>{connected ? "已连接" : "重连中"}</Tag>
+            <Tooltip title="群成员"><Button aria-label="群成员" icon={<Users size={17} />} onClick={() => { setMemberFilter("online"); setMembersOpen(true); }}>{onlineCount} 在线</Button></Tooltip>
+          </div>
+        </header>
           <div ref={messageListRef} data-testid="message-list" className={styles.messageList} onScroll={trackMessageScroll}>
+            {hasHistory && <Button type="text" loading={historyLoading} onClick={loadHistory}>更早的消息</Button>}
             {messages.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有消息" />}
-            {messages.map((item) => { const mine = item.fromDeviceId === currentDevice?.id; return <div key={item.id} className={`${styles.messageRow} ${mine ? styles.mine : ""}`}><div className={styles.messageMeta}>{deviceNameMap.get(item.fromDeviceId) ?? "访问端"} · {formatTime(item.createdAt)}</div><div className={item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} hostMode={hostMode} /> : item.content}</div></div>; })}
+            {messages.map((item) => { const mine = item.fromDeviceId === currentDevice?.id; return <div key={item.id} className={`${styles.messageRow} ${mine ? styles.mine : ""}`}><div className={styles.messageMeta}>{deviceNameMap.get(item.fromDeviceId) ?? "已移除访问端"} · {formatTime(item.createdAt)}</div><div className={item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} hostMode={hostMode} /> : item.content}</div></div>; })}
             {uploads.map((item) => <div key={item.id} className={`${styles.messageRow} ${styles.mine}`}><div className={styles.messageMeta}>{item.name}</div><div className={styles.uploadBubble}>
               <Progress percent={item.progress} status={item.status === "failed" ? "exception" : item.status === "running" ? "active" : "normal"} size="small" />
               <span>{item.status === "running" ? `${formatTransferSpeed(item.speed)} ${formatRemainingTime(item.remaining)}` : item.status === "failed" ? "上传失败" : "已取消"}</span>
@@ -329,11 +325,40 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
           <footer className={styles.composer}>
             <input ref={fileInputRef} type="file" multiple className={styles.fileInput} onChange={handleFileChange} />
             <Button aria-label="选择文件" icon={<Paperclip size={16} />} onClick={() => fileInputRef.current?.click()} />
-            <Input.TextArea value={draft} onChange={(event) => setDraft(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void sendMessage(); } }} autoSize={{ minRows: 1, maxRows: 3 }} placeholder="输入消息，Enter 发送" />
-            <Button type="primary" icon={<Send size={16} />} onClick={sendMessage}>发送</Button>
+            <Input.TextArea value={draft} onChange={(event) => setDraft(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void sendMessage(); } }} autoSize={{ minRows: 1, maxRows: 3 }} placeholder="发送到互通群聊" />
+            <Button type="primary" loading={sending} icon={<Send size={16} />} onClick={sendMessage}>发送</Button>
           </footer>
-        </> : <Empty description="暂无可用访问端" />}
+
       </section>
+      <Drawer title="群成员" open={membersOpen} onClose={() => setMembersOpen(false)} size={360}>
+        {currentDevice && <div className={styles.profile}>
+          <DeviceAvatar device={currentDevice} />
+          <div className={styles.profileBody}>
+            <label htmlFor="group-nickname">我的名称</label>
+            <Input id="group-nickname" value={nickname} maxLength={40} onChange={(event) => setNickname(event.target.value)} onPressEnter={changeNickname} />
+          </div>
+          <Tooltip title="保存名称"><Button aria-label="保存名称" icon={<Save size={16} />} onClick={changeNickname} /></Tooltip>
+        </div>}
+        <Segmented
+          className={styles.memberFilter}
+          block
+          value={memberFilter}
+          onChange={setMemberFilter}
+          options={[
+            { label: `在线 (${onlineCount})`, value: "online" },
+            { label: `全部 (${devices.length})`, value: "all" },
+          ]}
+        />
+        <div className={styles.memberList}>
+          {visibleMembers.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={memberFilter === "online" ? "暂无在线成员" : "暂无成员"} />}
+          {visibleMembers.map((device) => <div key={device.id} className={styles.member}>
+            <DeviceAvatar device={device} size="small" />
+            <div className={styles.memberName}><strong>{device.name}{device.id === currentDevice?.id ? "（我）" : ""}</strong><small>{device.browserSource}</small></div>
+            <Tag color={device.status === "online" ? "green" : "default"}>{device.status === "online" ? "在线" : "离线"}</Tag>
+            {hostMode && device.kind === "browser" && device.status === "offline" && <Popconfirm title="移除这个访问端？" description="聊天与文件记录仍会保留。" onConfirm={() => removeMember(device.id)} okText="移除" cancelText="取消"><Tooltip title="移除访问端"><Button danger type="text" aria-label={`移除访问端 ${device.name}`} icon={<Trash2 size={16} />} /></Tooltip></Popconfirm>}
+          </div>)}
+        </div>
+      </Drawer>
     </div>
   );
 }

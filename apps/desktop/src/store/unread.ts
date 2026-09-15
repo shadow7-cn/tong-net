@@ -1,91 +1,55 @@
 import { create } from "zustand";
-import { listMessages } from "@/api/conversation";
-import type { Device, Message } from "@/types/domain";
-import { advanceUnread, type ReadMarker } from "@/utils/unread";
+import { listMessages } from "@/api/message";
 
-type PersistedUnread = {
-  unreadByPeer: Record<string, number>;
-  markers: Record<string, ReadMarker>;
-};
-
-type UnreadState = PersistedUnread & {
+type UnreadState = {
   identityId: string;
-  activePeerId: string;
-  conversationVisible: boolean;
+  count: number;
+  initialized: boolean;
+  cursor?: string;
+  visible: boolean;
   configure: (identityId: string) => void;
-  ingestMessages: (peerId: string, messages: Message[]) => void;
-  markRead: (peerId: string) => void;
-  setActiveConversation: (peerId: string, visible: boolean) => void;
-  syncPeers: (peers: Device[]) => Promise<void>;
+  setVisible: (visible: boolean) => void;
+  sync: () => Promise<void>;
 };
 
-const emptyPersisted = (): PersistedUnread => ({ unreadByPeer: {}, markers: {} });
-const storageKey = (identityId: string) => `tong-net-unread:${identityId}`;
-
-function loadPersisted(identityId: string): PersistedUnread {
-  try {
-    const value = localStorage.getItem(storageKey(identityId));
-    return value ? { ...emptyPersisted(), ...JSON.parse(value) } : emptyPersisted();
-  } catch {
-    return emptyPersisted();
-  }
-}
-
-function savePersisted(identityId: string, value: PersistedUnread) {
-  if (!identityId) return;
-  try { localStorage.setItem(storageKey(identityId), JSON.stringify(value)); } catch { /* Storage may be unavailable. */ }
-}
+const storageKey = (id: string) => `tong-net-group-unread:${id}`;
+let pending: Promise<void> | undefined;
+let requested = false;
 
 export const useUnreadStore = create<UnreadState>((set, get) => ({
-  ...emptyPersisted(),
   identityId: "",
-  activePeerId: "",
-  conversationVisible: false,
+  count: 0,
+  initialized: false,
+  visible: false,
   configure: (identityId) => {
-    if (!identityId || get().identityId === identityId) return;
-    set({
-      identityId,
-      activePeerId: "",
-      conversationVisible: false,
-      ...loadPersisted(identityId),
-    });
+    if (get().identityId === identityId) return;
+    let saved: { count?: number; cursor?: string; initialized?: boolean } = {};
+    try { saved = JSON.parse(localStorage.getItem(storageKey(identityId)) ?? "{}"); } catch { /* Optional persistence. */ }
+    set({ identityId, count: saved.count ?? 0, cursor: saved.cursor, initialized: saved.initialized ?? false, visible: false });
   },
-  ingestMessages: (peerId, messages) => {
+  setVisible: (visible) => {
+    set({ visible, ...(visible ? { count: 0 } : {}) });
     const state = get();
-    if (!state.identityId || !peerId) return;
-    const active = state.conversationVisible && state.activePeerId === peerId;
-    const update = advanceUnread(
-      messages,
-      peerId,
-      state.markers[peerId],
-      state.unreadByPeer[peerId] ?? 0,
-      active,
-    );
-    const persisted = {
-      unreadByPeer: { ...state.unreadByPeer, [peerId]: update.unread },
-      markers: update.marker ? { ...state.markers, [peerId]: update.marker } : state.markers,
-    };
-    set(persisted);
-    savePersisted(state.identityId, persisted);
+    try { localStorage.setItem(storageKey(state.identityId), JSON.stringify({ count: state.count, cursor: state.cursor, initialized: state.initialized })); } catch { /* Optional persistence. */ }
   },
-  markRead: (peerId) => {
-    const state = get();
-    if (!peerId || !state.unreadByPeer[peerId]) return;
-    const persisted = {
-      unreadByPeer: { ...state.unreadByPeer, [peerId]: 0 },
-      markers: state.markers,
-    };
-    set(persisted);
-    savePersisted(state.identityId, persisted);
-  },
-  setActiveConversation: (activePeerId, conversationVisible) => {
-    set({ activePeerId, conversationVisible });
-    if (conversationVisible && activePeerId) get().markRead(activePeerId);
-  },
-  syncPeers: async (peers) => {
-    await Promise.all(peers.map(async (peer) => {
-      const { data } = await listMessages(peer.id);
-      get().ingestMessages(peer.id, data);
-    }));
+  sync: () => {
+    requested = true;
+    if (pending) return pending;
+    pending = (async () => {
+      while (requested) {
+        requested = false;
+        const { identityId, cursor } = get();
+        if (!identityId) return;
+        const { data } = await listMessages(cursor ? { after: cursor } : undefined);
+        if (get().identityId !== identityId) { requested = true; continue; }
+        const state = get();
+        const count = state.visible ? 0 : state.count + (state.initialized ? data.filter((item) => item.fromDeviceId !== identityId && item.type !== "system").length : 0);
+        const nextCursor = data[data.length - 1]?.id ?? cursor ?? "0";
+        set({ count, cursor: nextCursor, initialized: true });
+        try { localStorage.setItem(storageKey(identityId), JSON.stringify({ count, cursor: nextCursor, initialized: true })); } catch { /* Optional persistence. */ }
+        if (cursor && data.length === 50) requested = true;
+      }
+    })().finally(() => { pending = undefined; });
+    return pending;
   },
 }));

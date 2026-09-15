@@ -231,6 +231,7 @@ async fn copy_with_progress(
     total_bytes: u64,
     canceled: Arc<AtomicBool>,
     app: &tauri::AppHandle,
+    db: &db::Database,
 ) -> Result<u64, String> {
     let parent = destination
         .parent()
@@ -271,6 +272,7 @@ async fn copy_with_progress(
                 .await
                 .map_err(|error| error.to_string())?;
             transferred += read as u64;
+            db.update_transfer_progress(transfer_id, transferred)?;
             let _ = app.emit(
                 "native-transfer-progress",
                 NativeTransferProgress {
@@ -333,6 +335,7 @@ async fn save_file_as(
         size,
         canceled,
         &app,
+        &core.db,
     )
     .await;
     state

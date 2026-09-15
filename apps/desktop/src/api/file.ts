@@ -4,12 +4,11 @@ import type { Message } from "@/types/domain";
 
 export type UploadProgress = { loaded: number; total: number; progress: number };
 
-export function uploadConversationFile(
-  peerDeviceId: string,
+export function uploadGroupFile(
   formData: FormData,
   options: { transferId: string; fileName: string; fileSize: number; signal: AbortSignal; onProgress?: (value: UploadProgress) => void },
 ) {
-  return request.post<Message>(`/conversations/${peerDeviceId}/files`, formData, {
+  return request.post<Message>("/group/files", formData, {
     timeout: 0,
     signal: options.signal,
     headers: {

@@ -7,7 +7,10 @@ async fn main() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(7879);
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let data_dir = std::env::temp_dir().join("tong-net-browser-smoke");
+    let data_dir = std::env::args()
+        .nth(2)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("tong-net-browser-smoke"));
     let web_root = manifest.join("../dist");
     println!("http://127.0.0.1:{port}/?token=smoke-token#/web");
     tong_net_desktop_lib::run_standalone(port, data_dir, web_root, "smoke-token".into())

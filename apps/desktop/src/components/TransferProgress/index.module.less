@@ -47,4 +47,6 @@
   font-size: 12px;
   color: #64748b;
 }
-
+.progressRow { display: flex; align-items: center; gap: 12px; }
+.progressRow > :global(.ant-progress) { flex: 1; min-width: 0; }
+.speed { flex-shrink: 0; min-width: 75px; text-align: right; color: #64748b; font-size: 12px; font-variant-numeric: tabular-nums; }

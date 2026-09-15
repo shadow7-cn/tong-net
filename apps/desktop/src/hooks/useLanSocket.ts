@@ -22,7 +22,10 @@ export function useLanSocket(enabled: boolean, deviceId: string, onEvent: () => 
         getAccessToken(),
         deviceId,
       ));
-      socket.onopen = () => setConnected(true);
+      socket.onopen = () => {
+        setConnected(true);
+        callback.current();
+      };
       socket.onmessage = () => callback.current();
       socket.onerror = () => console.warn("同网互通实时连接发生错误");
       socket.onclose = (event) => {

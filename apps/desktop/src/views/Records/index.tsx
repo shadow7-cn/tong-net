@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Table, Tabs, Tag, message as toast } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { RefreshCw } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { request } from "@/http";
 import { useServiceStore } from "@/store";
 import type { Device, FileRecord, Message, TransferTask } from "@/types/domain";
@@ -15,6 +16,7 @@ const tableScroll = { x: "max-content" as const, y: "calc(100vh - 360px)" };
 const tablePagination = { pageSize: 20, showSizeChanger: false };
 
 export default function Records() {
+  const [searchParams] = useSearchParams();
   const [api, contextHolder] = toast.useMessage();
   const running = useServiceStore((state) => state.running);
   const [data, setData] = useState(empty);
@@ -39,7 +41,7 @@ export default function Records() {
   ];
   const messageColumns: ColumnsType<Message> = [
     { title: "发送访问端", dataIndex: "fromDeviceId", render: (id) => names.get(id) ?? id },
-    { title: "接收访问端", dataIndex: "toDeviceId", render: (id) => names.get(id) ?? id },
+    { title: "接收范围", dataIndex: "toDeviceId", render: (id) => id === "group" ? "互通群聊" : names.get(id) ?? id },
     { title: "类型", dataIndex: "type", width: 100, render: (type) => type === "text" ? "文字" : type === "file" ? "文件" : "系统" },
     { title: "内容", dataIndex: "content", ellipsis: true },
     { title: "时间", dataIndex: "createdAt", render: formatDateTime },
@@ -70,7 +72,7 @@ export default function Records() {
     {contextHolder}
     <header className={styles.header}><div><h1>互通记录</h1><p>访问端、聊天、文件和传输记录统一保存在本机 SQLite。</p></div><Button icon={<RefreshCw size={16} />} disabled={!running} loading={loading} onClick={load}>刷新</Button></header>
     {!running && <Alert type="info" showIcon message="开启互通服务后可查看本地记录。" />}
-    <Tabs className={styles.tabs} items={[
+    <Tabs defaultActiveKey={searchParams.get("tab") ?? "devices"} className={styles.tabs} items={[
       { key: "devices", label: `访问端 (${data.devices.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={deviceColumns} dataSource={data.devices} loading={loading} /></div> },
       { key: "messages", label: `聊天 (${data.messages.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={messageColumns} dataSource={data.messages} loading={loading} /></div> },
       { key: "files", label: `文件 (${data.files.length})`, children: <div className={styles.tableScroll}><Table scroll={tableScroll} pagination={tablePagination} rowKey="id" columns={fileColumns} dataSource={data.files} loading={loading} /></div> },

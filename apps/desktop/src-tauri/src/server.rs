@@ -135,18 +135,14 @@ fn device_id(headers: &HeaderMap) -> ApiResult<String> {
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "缺少访问端身份"))
 }
 
-fn participants(core: &ServerCore, headers: &HeaderMap, peer: &str) -> ApiResult<String> {
+fn group_member(core: &ServerCore, headers: &HeaderMap) -> ApiResult<String> {
     let me = device_id(headers)?;
     let me_exists = core
         .db
         .device_exists(&me)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let peer_exists = core
-        .db
-        .device_exists(peer)
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    if !me_exists || !peer_exists || me == peer {
-        return Err(api_error(StatusCode::BAD_REQUEST, "会话访问端无效"));
+    if !me_exists {
+        return Err(api_error(StatusCode::BAD_REQUEST, "访问端无效"));
     }
     Ok(me)
 }
@@ -197,15 +193,10 @@ async fn bootstrap(
     } else {
         decoded_source.as_str()
     };
-    let (device, is_new) = core
+    let (device, _) = core
         .db
         .register_device(client_id, name, browser_source)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    if is_new {
-        let _ =
-            core.db
-                .add_system_message(&device.id, "host", &format!("{} 已加入互通", device.name));
-    }
     broadcast_refresh(&core, "device_online");
     Ok(Json(BootstrapResponse {
         service_name: "同网互通".into(),
@@ -253,6 +244,9 @@ async fn rename_me(
         .db
         .rename_device(&id, name)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let _ = core
+        .db
+        .add_system_message(&id, &format!("访问端更名为 {name}"));
     broadcast_refresh(&core, "devices_changed");
     Ok(Json(device))
 }
@@ -291,16 +285,24 @@ async fn remove_device(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct MessageQuery {
+    before: Option<String>,
+    after: Option<String>,
+}
+
 async fn messages(
     State(core): State<Arc<ServerCore>>,
     headers: HeaderMap,
-    Path(peer): Path<String>,
+    Query(query): Query<MessageQuery>,
 ) -> ApiResult<Json<Vec<MessageRecord>>> {
     verify_token(&core, &headers, None)?;
-    let me = participants(&core, &headers, &peer)?;
-    Ok(Json(core.db.list_messages(&me, &peer).map_err(|e| {
-        api_error(StatusCode::INTERNAL_SERVER_ERROR, e)
-    })?))
+    group_member(&core, &headers)?;
+    Ok(Json(
+        core.db
+            .list_messages(query.before.as_deref(), query.after.as_deref())
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -310,18 +312,17 @@ struct TextBody {
 async fn send_text(
     State(core): State<Arc<ServerCore>>,
     headers: HeaderMap,
-    Path(peer): Path<String>,
     Json(body): Json<TextBody>,
 ) -> ApiResult<Json<MessageRecord>> {
     verify_token(&core, &headers, None)?;
-    let me = participants(&core, &headers, &peer)?;
+    let me = group_member(&core, &headers)?;
     let content = body.content.trim();
     if content.is_empty() || content.chars().count() > 4000 {
         return Err(api_error(StatusCode::BAD_REQUEST, "消息内容无效"));
     }
     let record = core
         .db
-        .add_text_message(&me, &peer, content)
+        .add_text_message(&me, content)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     broadcast_refresh(&core, "message_created");
     Ok(Json(record))
@@ -330,11 +331,10 @@ async fn send_text(
 async fn upload_file(
     State(core): State<Arc<ServerCore>>,
     headers: HeaderMap,
-    Path(peer): Path<String>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<MessageRecord>> {
     verify_token(&core, &headers, None)?;
-    let me = participants(&core, &headers, &peer)?;
+    let me = group_member(&core, &headers)?;
     let transfer_id = headers
         .get("x-transfer-id")
         .and_then(|value| value.to_str().ok())
@@ -356,9 +356,9 @@ async fn upload_file(
         .db
         .list_devices(&[])
         .ok()
-        .and_then(|items| items.into_iter().find(|item| item.id == peer))
+        .and_then(|items| items.into_iter().find(|item| item.id == me))
         .map(|item| item.name)
-        .unwrap_or_else(|| peer.clone());
+        .unwrap_or_else(|| me.clone());
     core.db
         .start_transfer(
             &transfer_id,
@@ -403,12 +403,27 @@ async fn upload_file(
                 .await
                 .map_err(|e| e.to_string())?;
             let mut size = 0u64;
-            while let Some(chunk) = field.chunk().await.map_err(|e| e.to_string())? {
+            let mut cancellation_check =
+                tokio::time::interval(std::time::Duration::from_millis(200));
+            loop {
+                if core.db.transfer_canceled(&transfer_id)? {
+                    return Err("传输已取消".into());
+                }
+                let chunk = tokio::select! {
+                    chunk = field.chunk() => chunk.map_err(|e| e.to_string())?,
+                    _ = cancellation_check.tick() => continue,
+                };
+                let Some(chunk) = chunk else {
+                    break;
+                };
                 size += chunk.len() as u64;
                 output.write_all(&chunk).await.map_err(|e| e.to_string())?;
                 let _ = core.db.update_transfer_progress(&transfer_id, size);
             }
             output.flush().await.map_err(|e| e.to_string())?;
+            if core.db.transfer_canceled(&transfer_id)? {
+                return Err("传输已取消".into());
+            }
             return Ok(size);
         }
         Err("没有收到文件".into())
@@ -438,7 +453,7 @@ async fn upload_file(
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let record = core
         .db
-        .add_file_message(&me, &peer, file)
+        .add_file_message(&me, file)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     core.db
         .finish_transfer(&transfer_id, "success", size)
@@ -632,19 +647,50 @@ async fn websocket(
     let device = query
         .device_id
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "缺少访问端身份"))?;
+    if !core
+        .db
+        .device_exists(&device)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+    {
+        return Err(api_error(StatusCode::BAD_REQUEST, "访问端无效"));
+    }
     Ok(upgrade.on_upgrade(move |socket| socket_loop(core, device, socket)))
 }
 
 async fn socket_loop(core: Arc<ServerCore>, device: String, socket: WebSocket) {
-    if let Ok(mut online) = core.online_counts.lock() {
-        *online.entry(device.clone()).or_default() += 1;
+    let became_online = if let Ok(mut online) = core.online_counts.lock() {
+        let count = online.entry(device.clone()).or_default();
+        *count += 1;
+        *count == 1
+    } else {
+        false
+    };
+    if became_online && device != "host" {
+        let name = core
+            .db
+            .list_devices(&[])
+            .unwrap_or_default()
+            .into_iter()
+            .find(|item| item.id == device)
+            .map(|item| item.name)
+            .unwrap_or_else(|| "访问端".into());
+        let _ = core
+            .db
+            .add_system_message(&device, &format!("{name} 已加入互通群聊"));
     }
     let _ = core.db.touch_device(&device);
     broadcast_refresh(&core, "device_online");
     let (mut sender, mut receiver) = socket.split();
     let mut events = core.events.subscribe();
     let send_task = tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    json!({ "type": "refresh" }).to_string()
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            };
             if sender.send(WsMessage::Text(event.into())).await.is_err() {
                 break;
             }
@@ -682,7 +728,7 @@ async fn socket_loop(core: Arc<ServerCore>, device: String, socket: WebSocket) {
             .unwrap_or_else(|| "访问端".into());
         let _ = core
             .db
-            .add_system_message(&device, "host", &format!("{name} 已离线"));
+            .add_system_message(&device, &format!("{name} 已离线"));
     }
     broadcast_refresh(&core, "device_offline");
 }
@@ -718,11 +764,8 @@ pub fn build_router(core: Arc<ServerCore>, web_root: PathBuf) -> Router {
         .route("/api/devices", get(list_devices))
         .route("/api/devices/{id}", axum::routing::delete(remove_device))
         .route("/api/devices/me", patch(rename_me))
-        .route(
-            "/api/conversations/{peer}/messages",
-            get(messages).post(send_text),
-        )
-        .route("/api/conversations/{peer}/files", post(upload_file))
+        .route("/api/group/messages", get(messages).post(send_text))
+        .route("/api/group/files", post(upload_file))
         .route("/api/files/{id}/download", get(download_file))
         .route("/api/transfers", get(transfers))
         .route("/api/transfers/{id}/cancel", post(cancel_transfer))
@@ -949,7 +992,7 @@ mod tests {
 
         auth(
             client
-                .post(format!("{base}/api/conversations/host/messages"))
+                .post(format!("{base}/api/group/messages"))
                 .json(&serde_json::json!({"content":"你好"})),
         )
         .send()
@@ -970,7 +1013,7 @@ mod tests {
         );
         let uploaded: Value = auth(
             client
-                .post(format!("{base}/api/conversations/host/files"))
+                .post(format!("{base}/api/group/files"))
                 .multipart(form),
         )
         .send()
@@ -983,16 +1026,15 @@ mod tests {
         .unwrap();
         let file_id = uploaded["file"]["id"].as_str().unwrap();
 
-        let messages: Vec<Value> =
-            auth(client.get(format!("{base}/api/conversations/host/messages")))
-                .send()
-                .await
-                .unwrap()
-                .error_for_status()
-                .unwrap()
-                .json()
-                .await
-                .unwrap();
+        let messages: Vec<Value> = auth(client.get(format!("{base}/api/group/messages")))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(messages.len(), 3);
         assert!(messages.iter().any(|message| message["type"] == "system"));
 
@@ -1019,14 +1061,14 @@ mod tests {
 
         let mut interrupted = tokio::net::TcpStream::connect(address).await.unwrap();
         let prefix = format!(
-            "POST /api/conversations/host/files HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer test-token\r\nX-Device-Id: {device_id}\r\nContent-Type: multipart/form-data; boundary=tongnet\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n--tongnet\r\nContent-Disposition: form-data; name=\"file\"; filename=\"broken.bin\"\r\nContent-Type: application/octet-stream\r\n\r\npartial"
+            "POST /api/group/files HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer test-token\r\nX-Device-Id: {device_id}\r\nContent-Type: multipart/form-data; boundary=tongnet\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n--tongnet\r\nContent-Disposition: form-data; name=\"file\"; filename=\"broken.bin\"\r\nContent-Type: application/octet-stream\r\n\r\npartial"
         );
         interrupted.write_all(prefix.as_bytes()).await.unwrap();
         interrupted.flush().await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         drop(interrupted);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(fs::read_dir(temp).unwrap().all(|entry| entry
+        assert!(fs::read_dir(&temp).unwrap().all(|entry| entry
             .unwrap()
             .path()
             .extension()
@@ -1044,6 +1086,64 @@ mod tests {
         assert!(transfer_rows
             .iter()
             .any(|row| row["fileName"] == "broken.bin" && row["status"] == "failed"));
+
+        // A host cancellation must clean up even if the uploader keeps its socket open.
+        let mut stalled = tokio::net::TcpStream::connect(address).await.unwrap();
+        let prefix = format!(
+            "POST /api/group/files HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer test-token\r\nX-Device-Id: {device_id}\r\nX-Transfer-Id: host-cancel-test\r\nContent-Type: multipart/form-data; boundary=tongnet\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n--tongnet\r\nContent-Disposition: form-data; name=\"file\"; filename=\"canceled.bin\"\r\nContent-Type: application/octet-stream\r\n\r\npartial"
+        );
+        stalled.write_all(prefix.as_bytes()).await.unwrap();
+        stalled.flush().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let rows: Vec<Value> = auth(client.get(format!("{base}/api/transfers")))
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                if rows.iter().any(|row| row["id"] == "host-cancel-test") {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        client
+            .post(format!("{base}/api/transfers/host-cancel-test/cancel"))
+            .bearer_auth("test-token")
+            .header("x-device-id", "host")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if fs::read_dir(&temp).unwrap().all(|entry| {
+                    entry.unwrap().path().extension().and_then(|v| v.to_str()) != Some("part")
+                }) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let rows: Vec<Value> = auth(client.get(format!("{base}/api/transfers")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(rows
+            .iter()
+            .any(|row| row["id"] == "host-cancel-test" && row["status"] == "canceled"));
+        assert!(!settings.save_dir.join("canceled.bin").exists());
+        drop(stalled);
         socket.close(None).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
@@ -1101,10 +1201,150 @@ mod tests {
             .unwrap();
         assert!(!is_new);
         assert_eq!(restored.id, original_device_id);
-        assert_eq!(
-            reopened.list_messages(&restored.id, "host").unwrap().len(),
-            4
+        assert_eq!(reopened.list_messages(None, None).unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn group_broadcast_reaches_host_and_all_members() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = AppSettings {
+            host_name: "host".into(),
+            port: 7878,
+            save_dir: root.path().join("files"),
+            rotate_token: true,
+            allow_tokenless_access: false,
+            auto_start_service: false,
+            cleanup_temp: true,
+        };
+        let core = make_core(
+            settings,
+            "token".into(),
+            root.path().join("db"),
+            root.path().join("temp"),
+        )
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = build_router(core.clone(), root.path().to_path_buf());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let client = Client::builder().no_proxy().build().unwrap();
+        let base = format!("http://{address}");
+        let mut ids = vec!["host".to_string()];
+        for name in ["phone", "tablet"] {
+            let response: Value = client
+                .get(format!("{base}/api/bootstrap"))
+                .bearer_auth("token")
+                .header("x-client-id", name)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            ids.push(
+                response["currentDevice"]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        let mut sockets = Vec::new();
+        for id in &ids {
+            sockets.push(
+                tokio_tungstenite::connect_async(format!(
+                    "ws://{address}/ws?token=token&deviceId={id}"
+                ))
+                .await
+                .unwrap()
+                .0,
+            );
+        }
+        let online_delete = client
+            .delete(format!("{base}/api/devices/{}", ids[1]))
+            .bearer_auth("token")
+            .header("x-device-id", "host")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(online_delete.status(), StatusCode::CONFLICT);
+        let sent: Value = client
+            .post(format!("{base}/api/group/messages"))
+            .bearer_auth("token")
+            .header("x-device-id", &ids[1])
+            .json(&serde_json::json!({"content":"hello everyone"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        for socket in &mut sockets {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let event = socket.next().await.unwrap().unwrap().into_text().unwrap();
+                    if event.contains("message_created") {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        }
+        for id in &ids {
+            let messages: Vec<Value> = client
+                .get(format!("{base}/api/group/messages"))
+                .bearer_auth("token")
+                .header("x-device-id", id)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert!(messages
+                .iter()
+                .any(|item| item["id"] == sent["id"] && item["content"] == "hello everyone"));
+        }
+        let form = multipart::Form::new().part(
+            "file",
+            multipart::Part::bytes(b"group-file".to_vec()).file_name("shared.txt"),
         );
+        let uploaded: Value = client
+            .post(format!("{base}/api/group/files"))
+            .bearer_auth("token")
+            .header("x-device-id", &ids[1])
+            .multipart(form)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let file_id = uploaded["file"]["id"].as_str().unwrap();
+        let download = client
+            .get(format!("{base}/api/files/{file_id}/download"))
+            .bearer_auth("token")
+            .header("x-device-id", &ids[2])
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        assert_eq!(download.bytes().await.unwrap().as_ref(), b"group-file");
+        assert_eq!(core.db.list_files().unwrap().len(), 1);
+        for socket in &mut sockets {
+            socket.close(None).await.unwrap();
+        }
+        task.abort();
+        let _ = task.await;
     }
 
     #[tokio::test]

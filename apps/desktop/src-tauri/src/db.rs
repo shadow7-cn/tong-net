@@ -30,7 +30,6 @@ pub struct FileRecord {
 #[serde(rename_all = "camelCase")]
 pub struct MessageRecord {
     pub id: String,
-    pub conversation_id: String,
     pub from_device_id: String,
     pub to_device_id: String,
     #[serde(rename = "type")]
@@ -56,14 +55,6 @@ pub struct TransferRecord {
 }
 
 pub struct Database(pub Mutex<Connection>);
-
-fn conversation_id(a: &str, b: &str) -> String {
-    if a < b {
-        format!("{a}:{b}")
-    } else {
-        format!("{b}:{a}")
-    }
-}
 
 impl Database {
     pub fn open(path: &Path, host_name: &str) -> Result<Self, String> {
@@ -269,37 +260,21 @@ impl Database {
         Ok(changed > 0)
     }
 
-    pub fn add_text_message(
-        &self,
-        from: &str,
-        to: &str,
-        content: &str,
-    ) -> Result<MessageRecord, String> {
-        self.add_message(from, to, "text", content, None)
+    pub fn add_text_message(&self, from: &str, content: &str) -> Result<MessageRecord, String> {
+        self.add_message(from, "text", content, None)
     }
 
-    pub fn add_system_message(
-        &self,
-        from: &str,
-        to: &str,
-        content: &str,
-    ) -> Result<MessageRecord, String> {
-        self.add_message(from, to, "system", content, None)
+    pub fn add_system_message(&self, from: &str, content: &str) -> Result<MessageRecord, String> {
+        self.add_message(from, "system", content, None)
     }
 
-    pub fn add_file_message(
-        &self,
-        from: &str,
-        to: &str,
-        file: FileRecord,
-    ) -> Result<MessageRecord, String> {
-        self.add_message(from, to, "file", "发送了文件", Some(file))
+    pub fn add_file_message(&self, from: &str, file: FileRecord) -> Result<MessageRecord, String> {
+        self.add_message(from, "file", "发送了文件", Some(file))
     }
 
     fn add_message(
         &self,
         from: &str,
-        to: &str,
         kind: &str,
         content: &str,
         file: Option<FileRecord>,
@@ -307,9 +282,8 @@ impl Database {
         let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
         let record = MessageRecord {
             id: Uuid::new_v4().to_string(),
-            conversation_id: conversation_id(from, to),
             from_device_id: from.into(),
-            to_device_id: to.into(),
+            to_device_id: "group".into(),
             message_type: kind.into(),
             content: content.into(),
             file,
@@ -318,25 +292,31 @@ impl Database {
         db.execute(
             "INSERT INTO messages(id, conversation_id, from_device_id, to_device_id, type, content, file_id, created_at)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![record.id, record.conversation_id, from, to, kind, content, record.file.as_ref().map(|f| &f.id), record.created_at],
+            params![record.id, "group", from, "group", kind, content, record.file.as_ref().map(|f| &f.id), record.created_at],
         ).map_err(|error| error.to_string())?;
         Ok(record)
     }
 
-    pub fn list_messages(&self, me: &str, peer: &str) -> Result<Vec<MessageRecord>, String> {
+    pub fn list_messages(
+        &self,
+        before: Option<&str>,
+        after: Option<&str>,
+    ) -> Result<Vec<MessageRecord>, String> {
         let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
         let mut stmt = db.prepare(
             "SELECT m.id,m.conversation_id,m.from_device_id,m.to_device_id,m.type,m.content,m.created_at,
                     f.id,f.name,f.size,f.status,f.created_at
              FROM messages m LEFT JOIN files f ON f.id=m.file_id
-             WHERE m.conversation_id=?1 ORDER BY m.created_at"
+             WHERE m.conversation_id='group'
+               AND (?1 IS NULL OR m.rowid < (SELECT rowid FROM messages WHERE id=?1))
+               AND (?2 IS NULL OR m.rowid > COALESCE((SELECT rowid FROM messages WHERE id=?2), 0))
+             ORDER BY CASE WHEN ?2 IS NOT NULL THEN m.rowid END ASC, m.rowid DESC LIMIT 50"
         ).map_err(|error| error.to_string())?;
         let rows = stmt
-            .query_map([conversation_id(me, peer)], |row| {
+            .query_map(params![before, after], |row| {
                 let file_id: Option<String> = row.get(7)?;
                 Ok(MessageRecord {
                     id: row.get(0)?,
-                    conversation_id: row.get(1)?,
                     from_device_id: row.get(2)?,
                     to_device_id: row.get(3)?,
                     message_type: row.get(4)?,
@@ -352,8 +332,13 @@ impl Database {
                 })
             })
             .map_err(|error| error.to_string())?;
-        rows.map(|row| row.map_err(|error| error.to_string()))
-            .collect()
+        let mut messages = rows
+            .map(|row| row.map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if after.is_none() {
+            messages.reverse();
+        }
+        Ok(messages)
     }
 
     pub fn add_file(&self, name: &str, stored_name: &str, size: u64) -> Result<FileRecord, String> {
@@ -443,6 +428,16 @@ impl Database {
         Ok(())
     }
 
+    pub fn transfer_canceled(&self, id: &str) -> Result<bool, String> {
+        let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM transfers WHERE id=?1 AND status='canceled')",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+    }
+
     pub fn list_transfers(&self) -> Result<Vec<TransferRecord>, String> {
         let db = self.0.lock().map_err(|_| "数据库锁不可用".to_string())?;
         let mut stmt = db.prepare("SELECT id,kind,file_name,peer_name,progress,status,created_at,total_bytes,transferred_bytes,finished_at FROM transfers ORDER BY created_at DESC")
@@ -479,7 +474,6 @@ impl Database {
                 let file_id: Option<String> = row.get(7)?;
                 Ok(MessageRecord {
                     id: row.get(0)?,
-                    conversation_id: row.get(1)?,
                     from_device_id: row.get(2)?,
                     to_device_id: row.get(3)?,
                     message_type: row.get(4)?,
@@ -523,6 +517,40 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::Database;
+
+    #[test]
+    fn group_history_pages_without_duplicates_and_keeps_private_history_archived() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("group.sqlite3"), "host").unwrap();
+        db.0.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO messages VALUES('legacy','a:b','a','b','text','private',NULL,'2000')",
+                [],
+            )
+            .unwrap();
+        let mut ids = Vec::new();
+        for i in 0..125 {
+            ids.push(
+                db.add_text_message("host", &format!("message-{i}"))
+                    .unwrap()
+                    .id,
+            );
+        }
+        let recent = db.list_messages(None, None).unwrap();
+        assert_eq!(recent.len(), 50);
+        assert_eq!(recent[0].id, ids[75]);
+        let older = db.list_messages(Some(&recent[0].id), None).unwrap();
+        assert_eq!(older[0].id, ids[25]);
+        let oldest = db.list_messages(Some(&older[0].id), None).unwrap();
+        assert_eq!(oldest.len(), 25);
+        let catchup = db.list_messages(None, Some(&ids[10])).unwrap();
+        assert_eq!(catchup[0].id, ids[11]);
+        assert_eq!(catchup[49].id, ids[60]);
+        assert!(db.list_messages(None, Some(&ids[124])).unwrap().is_empty());
+        assert_eq!(db.list_messages(None, Some("0")).unwrap()[0].id, ids[0]);
+        assert_eq!(db.list_all_messages().unwrap().len(), 126);
+    }
 
     #[test]
     fn canceled_transfer_cannot_be_restarted_by_late_upload_metadata() {

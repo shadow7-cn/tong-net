@@ -24,20 +24,12 @@ export type FileRecord = {
 
 export type Message = {
   id: string;
-  conversationId: string;
   fromDeviceId: string;
   toDeviceId: string;
   type: MessageType;
   content: string;
   file?: FileRecord;
   createdAt: string;
-};
-
-export type Conversation = {
-  id: string;
-  deviceAId: string;
-  deviceBId: string;
-  updatedAt: string;
 };
 
 export type TransferTask = {

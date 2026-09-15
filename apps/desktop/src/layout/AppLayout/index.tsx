@@ -18,31 +18,30 @@ export default function AppLayout() {
   const startService = useServiceStore((state) => state.startService);
   const stopService = useServiceStore((state) => state.stopService);
   const setDevices = useDeviceStore((state) => state.setDevices);
-  const unreadByPeer = useUnreadStore((state) => state.unreadByPeer);
+  const totalUnread = useUnreadStore((state) => state.count);
   const configureUnread = useUnreadStore((state) => state.configure);
-  const syncUnreadPeers = useUnreadStore((state) => state.syncPeers);
-  const setActiveConversation = useUnreadStore((state) => state.setActiveConversation);
-  const totalUnread = Object.values(unreadByPeer).reduce((sum, count) => sum + count, 0);
+  const syncUnread = useUnreadStore((state) => state.sync);
+  const setVisible = useUnreadStore((state) => state.setVisible);
 
   const refreshUnread = useCallback(async () => {
     if (!running) return;
     const { data } = await listDevices();
     setDevices(data);
-    await syncUnreadPeers(data.filter((device) => device.id !== "host"));
-  }, [running, setDevices, syncUnreadPeers]);
+    await syncUnread();
+  }, [running, setDevices, syncUnread]);
 
   useEffect(() => { initialize().catch((error) => api.error(String(error))); }, [initialize]);
   useEffect(() => {
     if (!running) return;
     setCurrentDeviceId("host");
     configureUnread("host");
-    void refreshUnread();
+    void refreshUnread().catch(() => undefined);
   }, [configureUnread, refreshUnread, running]);
   useEffect(() => {
-    if (location.pathname !== "/chat") setActiveConversation("", false);
-  }, [location.pathname, setActiveConversation]);
+    if (location.pathname !== "/chat") setVisible(false);
+  }, [location.pathname, setVisible]);
 
-  useLanSocket(running, "host", () => { void refreshUnread(); });
+  useLanSocket(running, "host", () => { void refreshUnread().catch(() => undefined); });
 
   const menuItems = [
     {
@@ -54,7 +53,7 @@ export default function AppLayout() {
         {
           key: "/chat",
           icon: <MessageCircle size={17} />,
-          label: <span className={styles.menuLabel}>访问端会话<Badge count={totalUnread} overflowCount={99} size="small" /></span>,
+          label: <span className={styles.menuLabel}>互通群聊<Badge count={totalUnread} overflowCount={99} size="small" /></span>,
         },
         { key: "/records", icon: <History size={17} />, label: "互通记录" },
       ],
