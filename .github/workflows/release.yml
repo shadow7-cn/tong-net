@@ -16,14 +16,17 @@ jobs:
       matrix:
         include:
           - name: Windows x64
+            easytier-target: win32-x64
             platform: windows-latest
             args: --bundles nsis
             rust-targets: ""
           - name: macOS Apple Silicon
+            easytier-target: darwin-arm64
             platform: macos-latest
             args: --target aarch64-apple-darwin --bundles dmg
             rust-targets: aarch64-apple-darwin
           - name: macOS Intel
+            easytier-target: darwin-x64
             platform: macos-latest
             args: --target x86_64-apple-darwin --bundles dmg
             rust-targets: x86_64-apple-darwin
@@ -55,6 +58,9 @@ jobs:
         run: npm ci
 
       - name: Prepare bundled EasyTier Core
+        env:
+          EASYTIER_TARGET: ${{ matrix.easytier-target }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run prepare:easytier
 
       - name: Verify release tag
@@ -95,6 +101,10 @@ jobs:
           $folder = Join-Path "portable" $folderName
           New-Item -ItemType Directory -Force -Path $folder | Out-Null
           Copy-Item "apps/desktop/src-tauri/target/release/tong-net-desktop.exe" (Join-Path $folder "同网互通.exe")
+          foreach ($binary in @("easytier-core", "easytier-cli")) {
+            Copy-Item "apps/desktop/src-tauri/binaries/${binary}-x86_64-pc-windows-msvc.exe" (Join-Path $folder "$binary.exe")
+          }
+          Copy-Item "apps/desktop/src-tauri/binaries/windows/*" $folder
           Copy-Item "LICENSE" (Join-Path $folder "LICENSE")
           @"
           同网互通 v$version Windows x64 便携版
@@ -108,6 +118,15 @@ jobs:
           "@ | Set-Content -Encoding utf8 (Join-Path $folder "README.txt")
           $zip = "portable/$folderName.zip"
           Compress-Archive -Path "$folder/*" -DestinationPath $zip -CompressionLevel Optimal
+          $verify = Join-Path "portable" "verify"
+          Expand-Archive -Path $zip -DestinationPath $verify
+          foreach ($required in @("同网互通.exe", "easytier-core.exe", "easytier-cli.exe", "wintun.dll", "Packet.dll", "WinDivert64.sys", "LICENSE", "README.txt")) {
+            if (!(Test-Path (Join-Path $verify $required))) { throw "便携包缺少 $required" }
+          }
+          & (Join-Path $verify "easytier-core.exe") --version
+          if ($LASTEXITCODE -ne 0) { throw "便携包 EasyTier Core 无法启动" }
+          & (Join-Path $verify "easytier-cli.exe") --version
+          if ($LASTEXITCODE -ne 0) { throw "便携包 EasyTier CLI 无法启动" }
           "PORTABLE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload Windows portable ZIP

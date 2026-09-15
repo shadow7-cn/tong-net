@@ -3,36 +3,18 @@ import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { selectEasyTierTarget } from "./easytier-target.mjs";
 
 const version = "2.6.4";
-const targets = {
-  "darwin-arm64": {
-    asset: `easytier-macos-aarch64-v${version}.zip`,
-    triple: "aarch64-apple-darwin",
-    executables: ["easytier-core", "easytier-cli"],
-  },
-  "darwin-x64": {
-    asset: `easytier-macos-x86_64-v${version}.zip`,
-    triple: "x86_64-apple-darwin",
-    executables: ["easytier-core", "easytier-cli"],
-  },
-  "win32-x64": {
-    asset: `easytier-windows-x86_64-v${version}.zip`,
-    triple: "x86_64-pc-windows-msvc",
-    executables: ["easytier-core.exe", "easytier-cli.exe"],
-  },
-};
-
-const target = targets[`${process.platform}-${process.arch}`];
-if (!target) {
-  throw new Error(`暂不支持当前构建平台：${process.platform}-${process.arch}`);
-}
+const target = selectEasyTierTarget(process.platform, process.arch, process.env.EASYTIER_TARGET);
+target.asset = `easytier-${target.os}-${target.arch}-v${version}.zip`;
 
 async function fetchJson(url) {
   const response = await fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "tong-net-build",
+      ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
     },
   });
   if (!response.ok) throw new Error(`GitHub API 请求失败：${response.status}`);
@@ -88,6 +70,15 @@ if (unzip.status !== 0) throw new Error("解压 EasyTier Core 失败");
 const binaryDirectory = join("apps", "desktop", "src-tauri", "binaries");
 const extension = process.platform === "win32" ? ".exe" : "";
 await mkdir(binaryDirectory, { recursive: true });
+if (process.platform === "win32") {
+  const runtimeDirectory = join(binaryDirectory, "windows");
+  await mkdir(runtimeDirectory, { recursive: true });
+  for (const name of ["wintun.dll", "Packet.dll", "WinDivert64.sys"]) {
+    const source = await findFile(extracted, name);
+    if (!source) throw new Error(`压缩包中没有找到 Windows 运行库 ${name}`);
+    await copyFile(source, join(runtimeDirectory, name));
+  }
+}
 for (const executable of target.executables) {
   const source = await findFile(extracted, executable);
   if (!source) throw new Error(`压缩包中没有找到 ${executable}`);

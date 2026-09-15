@@ -16,3 +16,4 @@ deploy/data/
 # Downloaded EasyTier binaries are prepared per target platform.
 apps/desktop/src-tauri/binaries/easytier-core-*
 apps/desktop/src-tauri/binaries/easytier-cli-*
+apps/desktop/src-tauri/binaries/windows/

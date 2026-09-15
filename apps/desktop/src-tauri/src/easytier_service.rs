@@ -550,6 +550,25 @@ fn install_service(core_path: &Path, runtime_dir: &Path) -> Result<(), String> {
     let script_path = runtime_dir.join("install-easytier-service.ps1");
     let token_path = runtime_dir.join("service-token");
     let ps_quote = |value: &Path| value.display().to_string().replace('\'', "''");
+    let binary_dir = core_path.parent().ok_or("无法定位 EasyTier 运行库目录")?;
+    let mut runtime_copies = String::new();
+    for name in ["wintun.dll", "Packet.dll", "WinDivert64.sys"] {
+        let installed = binary_dir.join(name);
+        let source = if installed.is_file() {
+            installed
+        } else {
+            binary_dir.join("windows").join(name)
+        };
+        if !source.is_file() {
+            return Err(format!(
+                "缺少 EasyTier 运行库 {name}，请重新安装完整的软件包"
+            ));
+        }
+        runtime_copies.push_str(&format!(
+            "Copy-Item -LiteralPath '{}' -Destination $serviceDir -Force\r\n",
+            ps_quote(&source)
+        ));
+    }
     let script = format!(
         "$ErrorActionPreference = 'Stop'\r\n\
          $name = 'TongNetEasyTierService'\r\n\
@@ -561,6 +580,7 @@ fn install_service(core_path: &Path, runtime_dir: &Path) -> Result<(), String> {
          $coreExe = Join-Path $serviceDir 'easytier-core.exe'\r\n\
          Copy-Item -LiteralPath '{}' -Destination $serviceExe -Force\r\n\
          Copy-Item -LiteralPath '{}' -Destination $coreExe -Force\r\n\
+         {runtime_copies}\
          $binaryPath = '\"' + $serviceExe + '\" --easytier-service --core-path \"' + $coreExe + '\" --runtime-dir \"{}\" --token-file \"{}\"'\r\n\
          New-Service -Name $name -BinaryPathName $binaryPath -DisplayName '同网互通 EasyTier 服务' -StartupType Automatic | Out-Null\r\n\
          sc.exe failure $name reset= 0 actions= restart/1000 | Out-Null\r\n\
