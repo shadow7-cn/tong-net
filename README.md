@@ -111,74 +111,13 @@ sudo xattr -cr "/Applications/同网互通.app"
 
 这一部分面向拥有 Linux 服务器、希望跨网络使用同网互通的用户。当前版本需要从项目代码构建 Docker 镜像，镜像市场安装将在后续版本提供。
 
-### 准备条件
+- 默认管理端口：`17280/TCP`。
+- 默认组网端口：`11010/TCP+UDP`。
+- 支持公共／私有节点模式，端口可通过 `deploy/.env` 调整。
 
-- 一台可以运行 Docker 和 Docker Compose 的 Linux 服务器。
-- 放通 `17280/TCP`，用于管理页面和桌面端认证。
-- 放通 `11010/TCP` 和 `11010/UDP`，用于 EasyTier 组网。
-- 服务器存在 `/dev/net/tun`。
+**[查看完整部署教程](docs/deploy-virtual-lan.md)**：从服务器准备、源码构建、首次设置，到桌面端连接、更新备份和常见问题。
 
-两个端口都是默认值，可以在 `deploy/.env` 中修改。
-
-### 部署
-
-```bash
-git clone https://github.com/shadow7-cn/tong-net.git
-cd tong-net
-cp deploy/.env.example deploy/.env
-docker compose -f deploy/docker-compose.yml build
-docker compose -f deploy/docker-compose.yml up -d
-```
-
-构建完成后，在浏览器打开：
-
-```text
-http://服务器IP:17280
-```
-
-首次进入会要求创建管理员用户名和密码、填写站点名称和对外 IP 或域名，并选择公共或私有节点模式。私有模式还需要创建第一个网络。
-
-常用管理命令：
-
-```bash
-# 查看运行状态
-docker compose -f deploy/docker-compose.yml ps
-
-# 查看日志
-docker compose -f deploy/docker-compose.yml logs -f
-
-# 停止服务
-docker compose -f deploy/docker-compose.yml down
-
-# 更新代码后重新构建
-git pull
-docker compose -f deploy/docker-compose.yml up -d --build
-```
-
-### 忘记管理员密码
-
-在服务器上执行下面的命令，然后根据提示输入两次新密码：
-
-```bash
-docker exec -it tong-net-server tong-net-server admin reset-password
-```
-
-重置后，已经登录的管理页面会全部退出，需要使用新密码重新登录。
-
-### 数据备份
-
-数据库、密钥、网络配置和设备凭据都保存在 `deploy/data`。备份前建议先停止容器：
-
-```bash
-docker compose -f deploy/docker-compose.yml down
-tar -czf tong-net-server-backup.tar.gz deploy/data
-docker compose -f deploy/docker-compose.yml up -d
-```
-
-恢复时，应把完整的 `deploy/data` 一起恢复，不能只复制 SQLite 数据库，否则已加密的网络配置将无法解密。
-
-> [!IMPORTANT]
-> 直接通过公网使用 `http://` 会明文传输登录信息。正式使用建议配置域名，并通过 Caddy、Nginx 或 1Panel 反向代理提供 HTTPS。组网端口 `11010/TCP+UDP` 仍需直接转发到容器。
+桌面端「虚拟局域网」右上角的「部署服务端」按钮也可以打开此教程。公网正式使用建议配置 HTTPS。
 
 ---
 

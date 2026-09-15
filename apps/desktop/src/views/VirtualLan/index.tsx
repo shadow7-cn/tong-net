@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Alert, Button, Empty, Form, Input, Modal, Space, Table, Tabs, Tag, message } from "antd";
-import { CircleStop, Network, Play, RefreshCw, Save, ShieldAlert } from "lucide-react";
+import { CircleStop, ExternalLink, Network, Play, RefreshCw, Save, ShieldAlert } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getEasyTierConfig,
   saveEasyTierConfig,
@@ -154,7 +155,7 @@ export default function VirtualLan() {
           </Space>
           <p>通过内置 EasyTier Core 加入远程网络，并查看当前在线成员。</p>
         </div>
-        <Space>
+        <Space wrap>
           <Tag color={status.connected ? "green" : status.running ? "processing" : "default"}>
             {status.phase}
           </Tag>
@@ -166,6 +167,10 @@ export default function VirtualLan() {
           {(status.insecureHttp || serverUrl.trim().startsWith("http://")) && (
             <Tag color="warning">未加密</Tag>
           )}
+          <Button
+            icon={<ExternalLink size={16} />}
+            onClick={() => void openUrl("https://github.com/shadow7-cn/tong-net/blob/main/docs/deploy-virtual-lan.md").catch(() => api.error("无法打开浏览器，请到 GitHub 仓库查看 docs/deploy-virtual-lan.md"))}
+          >部署服务端</Button>
           <Button
             icon={<RefreshCw size={16} />}
             onClick={() => void status.refresh()}
