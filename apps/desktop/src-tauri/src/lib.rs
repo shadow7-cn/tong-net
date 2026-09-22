@@ -3,6 +3,7 @@ mod db;
 mod easytier;
 mod easytier_service;
 mod server;
+mod update;
 
 use chrono::Utc;
 use config::{app_data_dir, load_settings, save_settings, AppSettings};
@@ -381,6 +382,7 @@ pub fn run() {
         .manage(AppRuntime::default())
         .manage(easytier::EasyTierRuntime::default())
         .invoke_handler(tauri::generate_handler![
+            update::check_for_updates,
             get_settings,
             update_settings,
             get_service_status,

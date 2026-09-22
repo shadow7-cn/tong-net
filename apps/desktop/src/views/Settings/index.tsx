@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Form, Input, InputNumber, Switch, message } from "antd";
-import { getSettings, updateSettings } from "@/api/service";
+import { getSettings, updateSettings, isTauri } from "@/api/service";
+import { RefreshCw } from "lucide-react";
+import { useUpdateStore } from "@/store/update";
 import type { AppSettings } from "@/types/domain";
 import { useServiceStore } from "@/store";
 import styles from "./index.module.less";
@@ -10,6 +12,7 @@ export default function Settings() {
   const [form] = Form.useForm<AppSettings>();
   const [loading, setLoading] = useState(true);
   const running = useServiceStore((state) => state.running);
+  const { currentVersion, checking, check } = useUpdateStore();
   const allowTokenlessAccess = Form.useWatch("allowTokenlessAccess", form);
 
   useEffect(() => {
@@ -50,5 +53,14 @@ export default function Settings() {
       <Form.Item label="启动时清理临时文件" name="cleanupTemp" valuePropName="checked"><Switch disabled={running} /></Form.Item>
       <Button type="primary" htmlType="submit" loading={loading}>保存设置</Button>
     </Form>
+    {isTauri() && <section className={styles.updates}>
+      <div><h2>软件更新</h2><span>当前版本：{currentVersion ? `v${currentVersion}` : "读取中"}</span></div>
+      <Button icon={<RefreshCw size={16} />} loading={checking} onClick={async () => {
+        try {
+          const result = await check();
+          if (!result.available) api.success("当前已是最新版本");
+        } catch (error) { api.error(String(error)); }
+      }}>检查更新</Button>
+    </section>}
   </div>;
 }

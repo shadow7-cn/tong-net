@@ -4846,6 +4846,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rusqlite",
  "rust-embed",
+ "semver",
  "serde",
  "serde_json",
  "tauri",
