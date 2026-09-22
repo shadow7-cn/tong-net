@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: docker/server.Dockerfile
-    image: tong-net-server:0.2.1
+    image: tong-net-server:0.2.2
     container_name: tong-net-server
     restart: unless-stopped
     ports:
