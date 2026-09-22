@@ -1,6 +1,7 @@
-import { ChangeEvent, UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Drawer, Empty, Input, Popconfirm, Progress, Segmented, Spin, Tag, Tooltip, message as toast } from "antd";
-import { ChevronDown, Paperclip, RotateCcw, Save, Send, Trash2, Users, X } from "lucide-react";
+import type { TextAreaRef } from "antd/es/input/TextArea";
+import { ChevronDown, Copy, File as FileIcon, Paperclip, RotateCcw, Save, Send, Trash2, Upload, Users, X } from "lucide-react";
 import { getBootstrap } from "@/api/service";
 import { listDevices, removeDevice, saveDeviceName, updateDeviceName } from "@/api/device";
 import { listMessages, sendTextMessage } from "@/api/message";
@@ -14,6 +15,9 @@ import { useServiceStore, useUnreadStore } from "@/store";
 import type { Device, Message } from "@/types/domain";
 import { formatTime } from "@/utils/time";
 import { createId } from "@/utils/id";
+import { copyText } from "@/utils/clipboard";
+import { isFileDrag, readDroppedFiles } from "@/utils/fileDrop";
+import { formatFileSize } from "@/utils/fileSize";
 import { isNearScrollBottom } from "@/utils/scroll";
 import { mergeMessages } from "@/utils/groupChat";
 import { estimateRemainingSeconds, formatRemainingTime, formatTransferSpeed } from "@/utils/transfer";
@@ -42,6 +46,8 @@ type WebClientProps = { hostMode?: boolean };
 export default function WebClient({ hostMode = false }: WebClientProps) {
   const [api, contextHolder] = toast.useMessage();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<TextAreaRef>(null);
+  const sendingRef = useRef(false);
   const messageListRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottomRef = useRef(true);
   const uploadControllersRef = useRef(new Map<string, AbortController>());
@@ -67,10 +73,31 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState("");
   const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<{ id: string; file: File }[]>([]);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [hasHistory, setHasHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const dragDepth = useRef(0);
+
+  useEffect(() => {
+    const reset = () => { dragDepth.current = 0; setDraggingFiles(false); };
+    const preventFileNavigation = (event: globalThis.DragEvent) => {
+      if (event.dataTransfer && isFileDrag(event.dataTransfer)) event.preventDefault();
+      if (event.type === "drop") reset();
+    };
+    window.addEventListener("dragover", preventFileNavigation);
+    window.addEventListener("drop", preventFileNavigation);
+    window.addEventListener("dragend", reset);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("dragover", preventFileNavigation);
+      window.removeEventListener("drop", preventFileNavigation);
+      window.removeEventListener("dragend", reset);
+      window.removeEventListener("blur", reset);
+    };
+  }, []);
 
   const acceptMessages = useCallback((incoming: Message[], prepend = false) => {
     const next = mergeMessages(messagesRef.current, incoming, prepend);
@@ -170,7 +197,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
       container.scrollTop = scrollAnchor.current.top + container.scrollHeight - scrollAnchor.current.height;
       scrollAnchor.current = undefined;
     } else if (shouldStickToBottomRef.current) container.scrollTop = container.scrollHeight;
-  }, [messages, uploads, loading, historyLoading]);
+  }, [messages, uploads, pendingFiles, loading, historyLoading]);
 
   const { connected } = useLanSocket(Boolean(currentDevice), currentDevice?.id ?? "", () => { void refresh().catch(() => undefined); });
   const deviceNameMap = useMemo(() => new Map(devices.map((device) => [device.id, device.name])), [devices]);
@@ -195,17 +222,23 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   };
   const sendMessage = async () => {
     const content = draft.trim();
-    if (!content || !currentDevice || sending) return;
+    if ((!content && pendingFiles.length === 0) || !currentDevice || sendingRef.current) return;
+    sendingRef.current = true;
+    const files = pendingFiles;
     followOwnMessage();
     setDraft("");
+    setPendingFiles([]);
     setSending(true);
+    files.forEach(({ file }) => startUpload(file));
     try {
-      acceptMessages([(await sendTextMessage(content)).data]);
-      void refresh().catch(() => undefined);
+      if (content) {
+        acceptMessages([(await sendTextMessage(content)).data]);
+        void refresh().catch(() => undefined);
+      }
     } catch (error: any) {
       setDraft((value) => value || content);
       api.error(error.response?.data?.message ?? "消息发送失败");
-    } finally { setSending(false); }
+    } finally { sendingRef.current = false; setSending(false); }
   };
   const changeNickname = async () => {
     const name = nickname.trim();
@@ -274,14 +307,45 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     startUpload(item.file);
   };
 
+  const queueFiles = (files: File[]) => {
+    if (!currentDevice || files.length === 0) return;
+    setPendingFiles((items) => [...items, ...files.map((file) => ({ id: createId(), file }))]);
+    composerRef.current?.focus({ preventScroll: true });
+  };
+
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!currentDevice) return;
-    followOwnMessage();
-    files.forEach(startUpload);
+    queueFiles(files);
   };
 
+  const handleDragEnter = (event: DragEvent<HTMLElement>) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    if (currentDevice) setDraggingFiles(true);
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (!dragDepth.current) setDraggingFiles(false);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDraggingFiles(false);
+    const { files, hasDirectories } = readDroppedFiles(event.dataTransfer);
+    if (hasDirectories) api.warning("暂不支持上传文件夹，请选择文件或压缩后上传");
+    queueFiles(files);
+  };
+
+  const copyMessage = async (content: string) => {
+    try { await copyText(content); api.success("已复制"); }
+    catch { api.error("复制失败，请长按或选中文字复制"); }
+  };
 
   const removeMember = async (id: string) => {
     try { await removeDevice(id); await refresh(); }
@@ -294,7 +358,17 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
   return (
     <div className={`${styles.page} ${hostMode ? styles.desktopEmbedded : ""}`}>
       {contextHolder}
-      <section className={styles.chat}>
+      <section className={styles.chat}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={(event) => {
+          if (!isFileDrag(event.dataTransfer)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = currentDevice ? "copy" : "none";
+        }}
+        onDrop={handleDrop}
+      >
+        {draggingFiles && <div className={styles.dropOverlay} data-testid="file-drop-overlay" aria-label="上传文件"><Upload size={40} /></div>}
         <header className={styles.chatHeader}>
           <div className={styles.brand}>
             <img src="/brand/tong-net-logo.png" alt="同网互通" />
@@ -309,7 +383,18 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
           <div ref={messageListRef} data-testid="message-list" className={styles.messageList} onScroll={trackMessageScroll}>
             {hasHistory && <Button type="text" loading={historyLoading} onClick={loadHistory}>更早的消息</Button>}
             {messages.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有消息" />}
-            {messages.map((item) => { const mine = item.fromDeviceId === currentDevice?.id; return <div key={item.id} className={`${styles.messageRow} ${mine ? styles.mine : ""}`}><div className={styles.messageMeta}>{deviceNameMap.get(item.fromDeviceId) ?? "已移除访问端"} · {formatTime(item.createdAt)}</div><div className={item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} hostMode={hostMode} /> : item.content}</div></div>; })}
+            {messages.map((item) => {
+              const mine = item.fromDeviceId === currentDevice?.id;
+              return <div key={item.id} className={`${styles.messageRow} ${mine ? styles.mine : ""}`}>
+                <div className={styles.messageMeta}>{deviceNameMap.get(item.fromDeviceId) ?? "已移除访问端"} · {formatTime(item.createdAt)}</div>
+                <div className={styles.messageBody}>
+                  <div className={item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} hostMode={hostMode} /> : item.content}</div>
+                  {item.type === "text" && !item.file && <Tooltip title="复制消息">
+                    <Button className={styles.copyMessage} type="text" aria-label="复制消息" icon={<Copy size={15} />} onClick={() => void copyMessage(item.content)} />
+                  </Tooltip>}
+                </div>
+              </div>;
+            })}
             {uploads.map((item) => <div key={item.id} className={`${styles.messageRow} ${styles.mine}`}><div className={styles.messageMeta}>{item.name}</div><div className={styles.uploadBubble}>
               <Progress percent={item.progress} status={item.status === "failed" ? "exception" : item.status === "running" ? "active" : "normal"} size="small" />
               <span>{item.status === "running" ? `${formatTransferSpeed(item.speed)} ${formatRemainingTime(item.remaining)}` : item.status === "failed" ? "上传失败" : "已取消"}</span>
@@ -323,10 +408,17 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
             </Button>
           )}
           <footer className={styles.composer}>
+            {pendingFiles.length > 0 && <div className={styles.pendingFiles} role="region" aria-label="待发送文件">
+              {pendingFiles.map(({ id, file }) => <div key={id} className={styles.pendingFile}>
+                <FileIcon size={20} aria-hidden="true" />
+                <div className={styles.pendingFileInfo}><span title={file.name}>{file.name}</span><small>{formatFileSize(file.size)}</small></div>
+                <Tooltip title="移除文件"><Button type="text" aria-label={`移除待发送文件 ${file.name}`} icon={<X size={16} />} onClick={() => setPendingFiles((items) => items.filter((item) => item.id !== id))} /></Tooltip>
+              </div>)}
+            </div>}
             <input ref={fileInputRef} type="file" multiple className={styles.fileInput} onChange={handleFileChange} />
             <Button aria-label="选择文件" icon={<Paperclip size={16} />} onClick={() => fileInputRef.current?.click()} />
-            <Input.TextArea value={draft} onChange={(event) => setDraft(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void sendMessage(); } }} autoSize={{ minRows: 1, maxRows: 3 }} placeholder="发送到互通群聊" />
-            <Button type="primary" loading={sending} icon={<Send size={16} />} onClick={sendMessage}>发送</Button>
+            <Input.TextArea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!event.repeat) void sendMessage(); } }} autoSize={{ minRows: 1, maxRows: 3 }} placeholder="发送到互通群聊" />
+            <Button type="primary" disabled={!draft.trim() && pendingFiles.length === 0} loading={sending} icon={<Send size={16} />} onClick={sendMessage}>发送</Button>
           </footer>
 
       </section>

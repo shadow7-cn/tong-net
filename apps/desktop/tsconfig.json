@@ -13,9 +13,10 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": "./",
+    /* 不设置 baseUrl：TypeScript 7.0 将移除 baseUrl，paths 在无 baseUrl 时
+       自动相对于本 tsconfig 文件所在目录解析（TS 4.1+ 行为） */
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
 
     /* Linting */

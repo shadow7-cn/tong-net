@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "同网互通",
+        "dragDropEnabled": false,
         "width": 1180,
         "height": 760,
         "minWidth": 960,
