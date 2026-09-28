@@ -6,6 +6,7 @@ import { listDevices } from "@/api/device";
 import { useLanSocket } from "@/hooks/useLanSocket";
 import { setCurrentDeviceId } from "@/http";
 import { useDeviceStore, useServiceStore, useUnreadStore } from "@/store";
+import { useEasyTierStore } from "@/store/easytier";
 import styles from "./index.module.less";
 
 export default function AppLayout() {
@@ -13,6 +14,18 @@ export default function AppLayout() {
   const location = useLocation();
   const [api, contextHolder] = message.useMessage();
   const running = useServiceStore((state) => state.running);
+  const virtualConnected = useEasyTierStore((state) => state.connected);
+  const refreshVirtualStatus = useEasyTierStore((state) => state.refresh);
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try { await refreshVirtualStatus(); } catch { /* Retry on the next status check. */ }
+      if (!disposed) timer = setTimeout(refresh, 3000);
+    };
+    void refresh();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [refreshVirtualStatus]);
   const loading = useServiceStore((state) => state.loading);
   const initialize = useServiceStore((state) => state.initialize);
   const startService = useServiceStore((state) => state.startService);
@@ -58,7 +71,7 @@ export default function AppLayout() {
         { key: "/records", icon: <History size={17} />, label: "互通记录" },
       ],
     },
-    { key: "/virtual-lan", icon: <Network size={17} />, label: "虚拟局域网" },
+    { key: "/virtual-lan", icon: <Network size={17} />, label: <span className={styles.menuLabel}>虚拟局域网{virtualConnected && <Tooltip title="已连接"><span className={styles.connectedDot} role="status" aria-label="虚拟局域网已连接" /></Tooltip>}</span> },
     { key: "/settings", disabled: running, icon: <Settings size={17} />, label: <Tooltip title={running ? "请先停止互通服务，再进行设置" : undefined}><span style={{ display: "block" }}>设置</span></Tooltip> },
   ];
 
