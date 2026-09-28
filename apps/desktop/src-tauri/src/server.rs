@@ -300,11 +300,33 @@ async fn messages(
 ) -> ApiResult<Json<Vec<MessageRecord>>> {
     verify_token(&core, &headers, None)?;
     group_member(&core, &headers)?;
-    Ok(Json(
-        core.db
+    let mut records = core.db
             .list_messages(query.before.as_deref(), query.after.as_deref())
-            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?,
-    ))
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    for record in &mut records {
+        if let Some(file) = &mut record.file {
+            if file.status == "available" && !file_exists(&core, &file.id)? {
+                file.status = "missing".into();
+            }
+        }
+    }
+    Ok(Json(records))
+}
+
+fn file_exists(core: &ServerCore, id: &str) -> ApiResult<bool> {
+    let info = core.db.file_path_info(id)
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(info.is_some_and(|(_, name, _)| core.settings.save_dir.join(name).is_file()))
+}
+
+async fn file_availability(
+    State(core): State<Arc<ServerCore>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    verify_token(&core, &headers, None)?;
+    group_member(&core, &headers)?;
+    Ok(Json(json!({ "exists": file_exists(&core, &id)? })))
 }
 
 #[derive(Deserialize)]
@@ -780,6 +802,7 @@ pub fn build_router(core: Arc<ServerCore>, web_root: PathBuf) -> Router {
         .route("/api/group/messages", get(messages).post(send_text))
         .route("/api/group/files", post(upload_file))
         .route("/api/files/{id}/download", get(download_file))
+        .route("/api/files/{id}/availability", get(file_availability))
         .route("/api/transfers", get(transfers))
         .route("/api/transfers/{id}/cancel", post(cancel_transfer))
         .route("/api/records", get(records))
@@ -961,6 +984,15 @@ mod tests {
         let response = client.get(format!("http://{address}/api/files/{}/download?token=secret&deviceId=host", raster.id)).send().await.unwrap();
         assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("attachment;"));
         assert_eq!(core.db.list_transfers().unwrap().len(), 1);
+        let availability = format!("http://{address}/api/files/{}/availability", raster.id);
+        assert_eq!(client.get(&availability).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        for exists in [true, false, true] {
+            if exists { fs::write(core.settings.save_dir.join("sample"), b"image-content").unwrap(); }
+            else { fs::remove_file(core.settings.save_dir.join("sample")).unwrap(); }
+            let result: serde_json::Value = client.get(&availability).bearer_auth("secret")
+                .header("X-Device-Id", "host").send().await.unwrap().json().await.unwrap();
+            assert_eq!(result["exists"], exists);
+        }
         task.abort();
     }
 

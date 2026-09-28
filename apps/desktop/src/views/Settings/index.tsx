@@ -56,7 +56,7 @@ export default function Settings() {
       <Form.Item label="服务端口" name="port" rules={[{ required: true }]}><InputNumber disabled={running} min={1024} max={65535} style={{ width: 180 }} /></Form.Item>
         </> },
         { key: "files", label: "文件", forceRender: true, children: <>
-      <Form.Item label="文件保存目录">
+      <Form.Item label="文件保存目录" extra="修改后，历史文件将从新目录查找；未迁移的文件会显示为不存在。">
         <div className={styles.directory}>
           <Form.Item name="saveDir" noStyle rules={[{ required: true, message: "请输入保存目录" }]}><Input disabled={running} aria-label="文件保存目录" /></Form.Item>
           <Tooltip title="选择文件夹"><Button aria-label="选择文件夹" disabled={running || !isTauri()} icon={<FolderSearch size={18} />} onClick={chooseDirectory} /></Tooltip>

@@ -18,7 +18,7 @@ export type FileRecord = {
   id: string;
   name: string;
   size: number;
-  status: "available" | "failed";
+  status: "available" | "failed" | "missing";
   createdAt: string;
 };
 

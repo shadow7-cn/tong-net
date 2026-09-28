@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Badge, Button, Layout, Menu, Tag, message } from "antd";
+import { Badge, Button, Layout, Menu, Tag, Tooltip, message } from "antd";
 import { History, MessageCircle, MonitorCog, Network, RadioTower, Settings } from "lucide-react";
 import { listDevices } from "@/api/device";
 import { useLanSocket } from "@/hooks/useLanSocket";
@@ -59,7 +59,7 @@ export default function AppLayout() {
       ],
     },
     { key: "/virtual-lan", icon: <Network size={17} />, label: "虚拟局域网" },
-    { key: "/settings", icon: <Settings size={17} />, label: "设置" },
+    { key: "/settings", disabled: running, icon: <Settings size={17} />, label: <Tooltip title={running ? "请先停止互通服务，再进行设置" : undefined}><span style={{ display: "block" }}>设置</span></Tooltip> },
   ];
 
   const toggle = async () => {
@@ -98,7 +98,7 @@ export default function AppLayout() {
         </div>
       </Layout.Sider>
       <Layout.Content className={styles.content}>
-        <Outlet />
+        {running && location.pathname === "/settings" ? <div style={{ padding: 24 }}>请先停止互通服务，再进行设置。</div> : <Outlet />}
       </Layout.Content>
     </Layout>
   );

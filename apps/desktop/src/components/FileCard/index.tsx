@@ -1,10 +1,10 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { Button, Image, Popconfirm, Progress, Tag, Tooltip, message } from "antd";
 import { Download, FileArchive, FolderOpen, Link, X } from "lucide-react";
-import { getDownloadUrl } from "@/api/file";
+import { getDownloadUrl, getFileAvailability } from "@/api/file";
 import type { FileRecord } from "@/types/domain";
 import { formatFileSize } from "@/utils/fileSize";
 import { copyText } from "@/utils/clipboard";
@@ -21,21 +21,36 @@ type FileCardProps = {
 type NativeProgress = { transferId: string; transferredBytes: number; totalBytes: number };
 
 export default function FileCard({ file, hostMode = false }: FileCardProps) {
-  const downloadUrl = file.status === "available" ? getDownloadUrl(file.id) : "";
+  const [missing, setMissing] = useState(file.status === "missing");
+  const downloadUrl = file.status !== "failed" && !missing ? getDownloadUrl(file.id) : "";
   const imageUrl = downloadUrl && isPreviewImage(file.name) ? getDownloadUrl(file.id, true) : "";
   const [previewFailed, setPreviewFailed] = useState(false);
   const [task, setTask] = useState<{ id: string; progress: number; speed: number; remaining: number; status: "running" | "failed" | "canceled" }>();
   const sampleRef = useRef({ time: 0, bytes: 0, speed: 0 });
   const [opening, setOpening] = useState(false);
+  const checkFile = useCallback(async () => {
+    const { data } = await getFileAvailability(file.id);
+    setMissing(!data.exists);
+    return data.exists;
+  }, [file.id]);
+  useEffect(() => { setPreviewFailed(false); }, [missing, file.id]);
+  useEffect(() => {
+    setMissing(file.status === "missing");
+    const refresh = () => { void checkFile().catch(() => undefined); };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [checkFile, file.status]);
   const openFile = async () => {
     setOpening(true);
-    try { await invoke("open_shared_file", { fileId: file.id }); }
+    try { if (await checkFile()) await invoke("open_shared_file", { fileId: file.id }); }
     catch (error) { message.error(String(error)); }
     finally { setOpening(false); }
   };
 
   const copyDownloadUrl = async () => {
     try {
+      if (!await checkFile()) return;
       await copyText(downloadUrl);
       message.success("下载链接已复制，请仅发送到可信访问端");
     } catch {
@@ -45,7 +60,7 @@ export default function FileCard({ file, hostMode = false }: FileCardProps) {
 
   const saveAs = async () => {
     let destination: string | null;
-    try { destination = await save({ title: "选择文件保存位置", defaultPath: file.name }); }
+    try { if (!await checkFile()) return; destination = await save({ title: "选择文件保存位置", defaultPath: file.name }); }
     catch (error) { message.error(`无法选择保存位置：${String(error)}`); return; }
     if (!destination) return;
     const id = createId();
@@ -91,8 +106,9 @@ export default function FileCard({ file, hostMode = false }: FileCardProps) {
   return (
     <div className={styles.card}>
       {imageUrl && <div className={styles.imagePreview}>
-        {previewFailed ? <span>图片预览失败，可另存为后查看</span> : <Image src={imageUrl} alt={file.name} width="100%" height={220} loading="lazy" preview={{ motionName: "" }} referrerPolicy="no-referrer" onError={() => setPreviewFailed(true)} />}
+        {previewFailed ? <span>图片预览失败，可另存为后查看</span> : <Image src={imageUrl} alt={file.name} width="100%" height={220} loading="lazy" preview={{ motionName: "" }} referrerPolicy="no-referrer" onError={() => { setPreviewFailed(true); void checkFile().catch(() => undefined); }} />}
       </div>}
+      {missing && isPreviewImage(file.name) && <div className={styles.imagePreview}>文件不存在</div>}
       <div className={styles.icon}>
         <FileArchive size={20} />
       </div>
@@ -100,8 +116,8 @@ export default function FileCard({ file, hostMode = false }: FileCardProps) {
         <div className={styles.name}>{file.name}</div>
         <div className={styles.meta}>
           {formatFileSize(file.size)}
-          <Tag color={file.status === "available" ? "green" : "red"}>
-            {file.status === "available" ? (hostMode ? "已保存" : "可保存") : "失败"}
+          <Tag color={downloadUrl ? "green" : "red"}>
+            {missing ? "文件不存在" : downloadUrl ? (hostMode ? "已保存" : "可保存") : "失败"}
           </Tag>
         </div>
       </div>
@@ -115,7 +131,17 @@ export default function FileCard({ file, hostMode = false }: FileCardProps) {
           </>
         ) : (
           <>
-            <Button icon={<Download size={16} />} href={downloadUrl || undefined} target="_blank" rel="noopener noreferrer" disabled={!downloadUrl}>另存为</Button>
+            <Button icon={<Download size={16} />} href={downloadUrl || undefined} target="_blank" rel="noopener noreferrer" disabled={!downloadUrl} onClick={async (event) => {
+              event.preventDefault();
+              const target = window.open("about:blank", "_blank");
+              if (target) target.opener = null;
+              try {
+                if (await checkFile()) {
+                  if (target) target.location.href = downloadUrl;
+                  else message.warning("请允许浏览器弹出下载窗口后重试");
+                } else target?.close();
+              } catch { target?.close(); message.error("无法检查文件，请稍后重试"); }
+            }}>另存为</Button>
             <Tooltip title="复制下载链接">
               <Button aria-label="复制下载链接" icon={<Link size={16} />} disabled={!downloadUrl} onClick={copyDownloadUrl} />
             </Tooltip>

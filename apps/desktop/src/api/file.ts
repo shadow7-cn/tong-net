@@ -28,6 +28,10 @@ export function cancelTransfer(transferId: string) {
   return request.post(`/transfers/${transferId}/cancel`);
 }
 
+export function getFileAvailability(fileId: string) {
+  return request.get<{ exists: boolean }>(`/files/${fileId}/availability`);
+}
+
 export function getDownloadUrl(fileId: string, preview = false) {
   const token = sessionStorage.getItem("tong-net-token") ?? "";
   const deviceId = sessionStorage.getItem("tong-net-device-id") ?? "";
