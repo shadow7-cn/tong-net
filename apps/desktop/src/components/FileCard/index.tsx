@@ -2,13 +2,14 @@ import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { Button, Progress, Tag, Tooltip, message } from "antd";
-import { Download, FileArchive, Link, X } from "lucide-react";
+import { Button, Image, Popconfirm, Progress, Tag, Tooltip, message } from "antd";
+import { Download, FileArchive, FolderOpen, Link, X } from "lucide-react";
 import { getDownloadUrl } from "@/api/file";
 import type { FileRecord } from "@/types/domain";
 import { formatFileSize } from "@/utils/fileSize";
 import { copyText } from "@/utils/clipboard";
 import { createId } from "@/utils/id";
+import { isPreviewImage } from "@/utils/filePreview";
 import { formatRemainingTime, formatTransferSpeed, estimateRemainingSeconds } from "@/utils/transfer";
 import styles from "./index.module.less";
 
@@ -21,25 +22,38 @@ type NativeProgress = { transferId: string; transferredBytes: number; totalBytes
 
 export default function FileCard({ file, hostMode = false }: FileCardProps) {
   const downloadUrl = file.status === "available" ? getDownloadUrl(file.id) : "";
+  const imageUrl = downloadUrl && isPreviewImage(file.name) ? getDownloadUrl(file.id, true) : "";
+  const [previewFailed, setPreviewFailed] = useState(false);
   const [task, setTask] = useState<{ id: string; progress: number; speed: number; remaining: number; status: "running" | "failed" | "canceled" }>();
   const sampleRef = useRef({ time: 0, bytes: 0, speed: 0 });
+  const [opening, setOpening] = useState(false);
+  const openFile = async () => {
+    setOpening(true);
+    try { await invoke("open_shared_file", { fileId: file.id }); }
+    catch (error) { message.error(String(error)); }
+    finally { setOpening(false); }
+  };
 
   const copyDownloadUrl = async () => {
     try {
       await copyText(downloadUrl);
       message.success("下载链接已复制，请仅发送到可信访问端");
     } catch {
-      message.error("复制失败，请长按下载按钮复制链接");
+      message.error("复制失败，请长按另存为按钮复制链接");
     }
   };
 
   const saveAs = async () => {
-    const destination = await save({ title: "选择文件保存位置", defaultPath: file.name });
+    let destination: string | null;
+    try { destination = await save({ title: "选择文件保存位置", defaultPath: file.name }); }
+    catch (error) { message.error(`无法选择保存位置：${String(error)}`); return; }
     if (!destination) return;
     const id = createId();
     sampleRef.current = { time: performance.now(), bytes: 0, speed: 0 };
     setTask({ id, progress: 0, speed: 0, remaining: 0, status: "running" });
-    const unlisten = await listen<NativeProgress>("native-transfer-progress", ({ payload }) => {
+    let unlisten: (() => void) | undefined;
+    try {
+    unlisten = await listen<NativeProgress>("native-transfer-progress", ({ payload }) => {
       if (payload.transferId !== id) return;
       const now = performance.now();
       const elapsed = (now - sampleRef.current.time) / 1000;
@@ -56,7 +70,6 @@ export default function FileCard({ file, hostMode = false }: FileCardProps) {
         remaining: estimateRemainingSeconds(payload.totalBytes, payload.transferredBytes, speed),
       } : current);
     });
-    try {
       await invoke("save_file_as", { fileId: file.id, destination, transferId: id });
       setTask(undefined);
       message.success(`${file.name} 已保存`);
@@ -65,17 +78,21 @@ export default function FileCard({ file, hostMode = false }: FileCardProps) {
       setTask((current) => current ? { ...current, status: canceled ? "canceled" : "failed" } : current);
       if (!canceled) message.error(`${file.name} 保存失败：${String(error)}`);
     } finally {
-      unlisten();
+      unlisten?.();
     }
   };
 
   const cancelNativeSave = async () => {
     if (!task) return;
-    await invoke("cancel_native_transfer", { transferId: task.id });
+    try { await invoke("cancel_native_transfer", { transferId: task.id }); }
+    catch (error) { message.error(String(error)); }
   };
 
   return (
     <div className={styles.card}>
+      {imageUrl && <div className={styles.imagePreview}>
+        {previewFailed ? <span>图片预览失败，可另存为后查看</span> : <Image src={imageUrl} alt={file.name} width="100%" height={220} loading="lazy" preview={{ motionName: "" }} referrerPolicy="no-referrer" onError={() => setPreviewFailed(true)} />}
+      </div>}
       <div className={styles.icon}>
         <FileArchive size={20} />
       </div>
@@ -84,16 +101,21 @@ export default function FileCard({ file, hostMode = false }: FileCardProps) {
         <div className={styles.meta}>
           {formatFileSize(file.size)}
           <Tag color={file.status === "available" ? "green" : "red"}>
-            {file.status === "available" ? "可下载" : "失败"}
+            {file.status === "available" ? (hostMode ? "已保存" : "可保存") : "失败"}
           </Tag>
         </div>
       </div>
       <div className={styles.actions}>
         {hostMode ? (
+          <>
+          <Popconfirm title="使用系统默认应用打开？" description="请仅打开来自可信发送者的文件。" onConfirm={openFile} okText="打开" cancelText="取消" disabled={!downloadUrl}>
+            <Button icon={<FolderOpen size={16} />} disabled={!downloadUrl} loading={opening}>打开</Button>
+          </Popconfirm>
           <Button icon={<Download size={16} />} disabled={!downloadUrl || task?.status === "running"} onClick={saveAs}>另存为</Button>
+          </>
         ) : (
           <>
-            <Button icon={<Download size={16} />} href={downloadUrl || undefined} disabled={!downloadUrl}>下载</Button>
+            <Button icon={<Download size={16} />} href={downloadUrl || undefined} target="_blank" rel="noopener noreferrer" disabled={!downloadUrl}>另存为</Button>
             <Tooltip title="复制下载链接">
               <Button aria-label="复制下载链接" icon={<Link size={16} />} disabled={!downloadUrl} onClick={copyDownloadUrl} />
             </Tooltip>

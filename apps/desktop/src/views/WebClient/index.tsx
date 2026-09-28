@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, ClipboardEvent, DragEvent, UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Drawer, Empty, Input, Popconfirm, Progress, Segmented, Spin, Tag, Tooltip, message as toast } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import { ChevronDown, Copy, File as FileIcon, Paperclip, RotateCcw, Save, Send, Trash2, Upload, Users, X } from "lucide-react";
@@ -319,6 +319,14 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
     queueFiles(files);
   };
 
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const { files, hasDirectories } = readDroppedFiles(event.clipboardData);
+    if (!files.length && !hasDirectories) return;
+    event.preventDefault();
+    if (hasDirectories) api.warning("暂不支持粘贴文件夹，请先压缩后上传");
+    queueFiles(files);
+  };
+
   const handleDragEnter = (event: DragEvent<HTMLElement>) => {
     if (!isFileDrag(event.dataTransfer)) return;
     event.preventDefault();
@@ -388,7 +396,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
               return <div key={item.id} className={`${styles.messageRow} ${mine ? styles.mine : ""}`}>
                 <div className={styles.messageMeta}>{deviceNameMap.get(item.fromDeviceId) ?? "已移除访问端"} · {formatTime(item.createdAt)}</div>
                 <div className={styles.messageBody}>
-                  <div className={item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} hostMode={hostMode} /> : item.content}</div>
+                  <div className={item.file ? styles.fileBubble : item.type === "system" ? styles.systemBubble : styles.bubble}>{item.file ? <FileCard file={item.file} hostMode={hostMode} /> : item.content}</div>
                   {item.type === "text" && !item.file && <Tooltip title="复制消息">
                     <Button className={styles.copyMessage} type="text" aria-label="复制消息" icon={<Copy size={15} />} onClick={() => void copyMessage(item.content)} />
                   </Tooltip>}
@@ -417,7 +425,7 @@ export default function WebClient({ hostMode = false }: WebClientProps) {
             </div>}
             <input ref={fileInputRef} type="file" multiple className={styles.fileInput} onChange={handleFileChange} />
             <Button aria-label="选择文件" icon={<Paperclip size={16} />} onClick={() => fileInputRef.current?.click()} />
-            <Input.TextArea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!event.repeat) void sendMessage(); } }} autoSize={{ minRows: 1, maxRows: 3 }} placeholder="发送到互通群聊" />
+            <Input.TextArea ref={composerRef} value={draft} onPaste={handlePaste} onChange={(event) => setDraft(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!event.repeat) void sendMessage(); } }} autoSize={{ minRows: 1, maxRows: 3 }} placeholder="发送到互通群聊" />
             <Button type="primary" disabled={!draft.trim() && pendingFiles.length === 0} loading={sending} icon={<Send size={16} />} onClick={sendMessage}>发送</Button>
           </footer>
 

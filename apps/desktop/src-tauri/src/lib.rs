@@ -225,6 +225,21 @@ struct NativeTransferProgress {
     total_bytes: u64,
 }
 
+#[tauri::command]
+fn open_shared_file(state: tauri::State<'_, AppRuntime>, file_id: String) -> Result<(), String> {
+    let core = state.service.lock().map_err(|_| "服务状态不可用".to_string())?
+        .as_ref().map(|service| service.core.clone())
+        .ok_or_else(|| "互通服务未运行".to_string())?;
+    let (_, stored_name, _) = core.db.file_path_info(&file_id)?
+        .ok_or_else(|| "文件不存在".to_string())?;
+    let directory = core.settings.save_dir.canonicalize().map_err(|_| "文件目录不存在".to_string())?;
+    let path = directory.join(stored_name).canonicalize().map_err(|_| "文件不存在，可能已被移动或删除".to_string())?;
+    if !path.starts_with(&directory) || !path.is_file() {
+        return Err("文件路径无效".to_string());
+    }
+    open::that(path).map_err(|error| format!("无法打开文件：{error}"))
+}
+
 async fn copy_with_progress(
     source: &Path,
     destination: &Path,
@@ -389,6 +404,7 @@ pub fn run() {
             start_service,
             stop_service,
             open_save_directory,
+            open_shared_file,
             save_file_as,
             cancel_native_transfer,
             easytier::get_easytier_config,

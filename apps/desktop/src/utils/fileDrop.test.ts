@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { isFileDrag, readDroppedFiles } from "./fileDrop";
 
 describe("file drag and drop", () => {
+  it("reads pasted screenshots alongside text without duplicating files", () => {
+    const file = { name: "image.png", type: "image/png" } as File;
+    const clipboard = { items: [
+      { kind: "string", type: "text/html" },
+      { kind: "file", getAsFile: () => file },
+    ], files: [file] } as unknown as DataTransfer;
+    expect(readDroppedFiles(clipboard).files).toEqual([file]);
+  });
   it("ignores text and link drags", () => {
     expect(isFileDrag({ types: ["text/plain", "text/uri-list"] })).toBe(false);
     expect(isFileDrag({ types: ["Files"] })).toBe(true);

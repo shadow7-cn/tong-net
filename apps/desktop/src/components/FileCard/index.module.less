@@ -1,6 +1,7 @@
 .card {
+  box-sizing: border-box;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-columns: 38px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   width: min(440px, 100%);
@@ -8,6 +9,20 @@
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
+}
+
+.imagePreview {
+  grid-column: 1 / -1;
+  height: 220px;
+  min-width: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: #64748b;
+  background: #fff;
+  border-radius: 6px;
+
+  img { object-fit: contain; }
 }
 
 .icon {
@@ -44,6 +59,8 @@
 }
 
 .actions {
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
   display: flex;
   gap: 6px;
   align-items: center;
@@ -51,12 +68,14 @@
 
 .transfer {
   display: grid;
-  grid-column: 2 / -1;
-  grid-template-columns: minmax(100px, 1fr) auto auto;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   font-size: 12px;
   color: #64748b;
+
+  > :first-child { grid-column: 1 / -1; }
 }
 
 @media (max-width: 480px) {

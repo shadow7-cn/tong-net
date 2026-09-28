@@ -28,7 +28,7 @@ export function cancelTransfer(transferId: string) {
   return request.post(`/transfers/${transferId}/cancel`);
 }
 
-export function getDownloadUrl(fileId: string) {
+export function getDownloadUrl(fileId: string, preview = false) {
   const token = sessionStorage.getItem("tong-net-token") ?? "";
   const deviceId = sessionStorage.getItem("tong-net-device-id") ?? "";
   const configuredBase = typeof request.defaults.baseURL === "string" && request.defaults.baseURL.startsWith("http")
@@ -36,6 +36,7 @@ export function getDownloadUrl(fileId: string) {
     : "";
   const query = new URLSearchParams({ deviceId });
   if (token) query.set("token", token);
+  if (preview) query.set("preview", "true");
   const path = `/api/files/${fileId}/download?${query.toString()}`;
   return new URL(path, configuredBase || window.location.origin).toString();
 }

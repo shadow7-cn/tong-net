@@ -87,6 +87,8 @@ pub struct ServiceInfo {
 #[derive(Debug, Deserialize)]
 struct TokenQuery {
     token: Option<String>,
+    #[serde(default)]
+    preview: bool,
     #[serde(rename = "deviceId")]
     device_id: Option<String>,
 }
@@ -572,6 +574,7 @@ async fn download_file(
     else {
         return Err(api_error(StatusCode::NOT_FOUND, "文件不存在"));
     };
+    let preview = query.preview && is_preview_image(&name);
     let (start, end, partial) = parse_range(
         headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
         size,
@@ -584,7 +587,7 @@ async fn download_file(
         .await
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let length = end - start + 1;
-    if end == size.saturating_sub(1) {
+    if !preview && end == size.saturating_sub(1) {
         if let Some(requester) = query.device_id.as_deref() {
             let peer_name = core
                 .db
@@ -607,6 +610,10 @@ async fn download_file(
         StatusCode::OK
     };
     let headers = response.headers_mut();
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    if preview {
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    }
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     headers.insert(
         header::CONTENT_LENGTH,
@@ -624,7 +631,8 @@ async fn download_file(
     headers.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!(
-            "attachment; filename=\"download\"; filename*=UTF-8''{encoded}"
+            "{}; filename=\"download\"; filename*=UTF-8''{encoded}",
+            if preview { "inline" } else { "attachment" }
         ))
         .unwrap(),
     );
@@ -635,6 +643,11 @@ async fn download_file(
         );
     }
     Ok(response)
+}
+
+fn is_preview_image(name: &str) -> bool {
+    let extension = std::path::Path::new(name).extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "ico")
 }
 
 async fn websocket(
@@ -913,6 +926,42 @@ mod tests {
         assert_eq!(parse_range(Some("bytes=3-5"), 10), Ok((3, 5, true)));
         assert_eq!(parse_range(Some("bytes=-4"), 10), Ok((6, 9, true)));
         assert!(parse_range(Some("bytes=9-12"), 10).is_err());
+    }
+
+    #[tokio::test]
+    async fn image_preview_is_authenticated_and_does_not_record_downloads() {
+        use axum::http::header;
+        let root = tempfile::tempdir().unwrap();
+        let settings = AppSettings {
+            host_name: "preview-test".into(), port: 7878,
+            save_dir: root.path().join("files"), rotate_token: true,
+            allow_tokenless_access: false, auto_start_service: false, cleanup_temp: true,
+        };
+        fs::create_dir_all(&settings.save_dir).unwrap();
+        let core = make_core(settings, "secret".into(), root.path().join("test.db"), root.path().join("temp")).unwrap();
+        fs::write(core.settings.save_dir.join("sample"), b"image-content").unwrap();
+        let raster = core.db.add_file("image.PNG", "sample", 13).unwrap();
+        let active = core.db.add_file("unsafe.svg", "sample", 13).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = build_router(core.clone(), root.path().join("web"));
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let url = format!("http://{address}/api/files/{}/download?preview=true&deviceId=host", raster.id);
+        assert_eq!(client.get(&url).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        let response = client.get(format!("{url}&token=secret")).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+        assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("inline;"));
+        assert_eq!(response.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(response.bytes().await.unwrap().as_ref(), b"image-content");
+        assert!(core.db.list_transfers().unwrap().is_empty());
+        let response = client.get(format!("http://{address}/api/files/{}/download?preview=true&token=secret", active.id)).send().await.unwrap();
+        assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("attachment;"));
+        let response = client.get(format!("http://{address}/api/files/{}/download?token=secret&deviceId=host", raster.id)).send().await.unwrap();
+        assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("attachment;"));
+        assert_eq!(core.db.list_transfers().unwrap().len(), 1);
+        task.abort();
     }
 
     #[tokio::test]
